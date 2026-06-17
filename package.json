@@ -1,0 +1,19 @@
+{
+  "name": "tickets-la4ta",
+  "version": "1.0.0",
+  "description": "Script en tiempo real para generar tickets de picking en PDF para la tienda la4ta",
+  "main": "listener.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node listener.js",
+    "test-print": "node test-print.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "bwip-js": "^4.8.0",
+    "dotenv": "^16.4.7",
+    "node-fetch": "^2.7.0",
+    "pdfkit": "^0.16.0",
+    "ws": "^8.18.1"
+  }
+}

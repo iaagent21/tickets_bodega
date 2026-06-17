@@ -1,0 +1,8 @@
+# Credenciales y datos locales  
+.env  
+tickets/  
+node_modules/  
+*.log  
+npm-debug.log*  
+.DS_Store  
+Thumbs.db 

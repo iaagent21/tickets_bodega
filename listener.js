@@ -1,0 +1,344 @@
+const fs = require('fs');
+const path = require('path');
+const net = require('net');
+const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
+const fetch = require('node-fetch');
+const PDFDocument = require('pdfkit');
+const bwipjs = require('bwip-js');
+
+// Cargar variables de entorno
+require('dotenv').config();
+
+const {
+  SUPABASE_URL,
+  SUPABASE_KEY,          // Acepta service_role key O anon key
+  STORE_USER_EMAIL,
+  STORE_USER_PASSWORD,
+  API_URL,
+  DRY_RUN,
+  // Configuración de tienda — cambiar estos valores para adaptar a otra tienda
+  PEDIDOS_TABLE,         // Nombre de la tabla en Supabase, ej: pedidos_la4ta
+  TIENDA,                // Identificador de tienda para la API, ej: la4ta
+} = process.env;
+
+// Validar variables requeridas
+const missingVars = [
+  !SUPABASE_URL && 'SUPABASE_URL',
+  !SUPABASE_KEY && 'SUPABASE_KEY',
+  !STORE_USER_EMAIL && 'STORE_USER_EMAIL',
+  !STORE_USER_PASSWORD && 'STORE_USER_PASSWORD',
+  !API_URL && 'API_URL',
+  !PEDIDOS_TABLE && 'PEDIDOS_TABLE',
+  !TIENDA && 'TIENDA',
+].filter(Boolean);
+
+if (missingVars.length > 0) {
+  console.error(`ERROR: Faltan variables de entorno requeridas en el archivo .env: ${missingVars.join(', ')}`);
+  process.exit(1);
+}
+
+// Asegurar que exista la carpeta para guardar los PDFs
+const ticketsDir = path.join(__dirname, 'tickets');
+if (!fs.existsSync(ticketsDir)) {
+  fs.mkdirSync(ticketsDir, { recursive: true });
+}
+
+// Inicializar cliente de Supabase
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false },
+  realtime: { websocket: ws }
+});
+
+console.log('==================================================');
+console.log('   Iniciando Script de Impresión de Tickets');
+console.log(`   Tienda: ${TIENDA}`);
+console.log(`   Tabla Supabase: ${PEDIDOS_TABLE}`);
+console.log(`   Servidor API: ${API_URL}`);
+console.log(`   Modo Simulación: ${DRY_RUN === 'true' ? 'ACTIVADO' : 'DESACTIVADO'}`);
+console.log('==================================================');
+
+// Función para iniciar sesión y obtener token JWT de Supabase
+async function getApiAuthToken() {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: STORE_USER_EMAIL,
+    password: STORE_USER_PASSWORD
+  });
+  if (error) {
+    throw new Error(`Error de autenticación: ${error.message}`);
+  }
+  return data.session.access_token;
+}
+
+// Función para obtener la ruta del pedido desde la API
+async function fetchPickingRoute(pedido, token) {
+  const url = `${API_URL}/picking/ruta/${encodeURIComponent(pedido)}`;
+  const response = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'x-app-id': 'etiquetas',
+      'x-tienda': TIENDA
+    }
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    throw new Error(errorBody?.message ?? `La API retornó código ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Función para generar la imagen del código de barras en formato PNG Buffer
+function generateBarcodeBuffer(text) {
+  return new Promise((resolve, reject) => {
+    bwipjs.toBuffer({
+      bcid: 'code128',       // Tipo de código de barras
+      text: text,            // Texto a codificar
+      scale: 3,              // Factor de escala
+      height: 10,            // Altura de barras en mm
+      includetext: true,     // Incluir texto abajo
+      textalign: 'center',   // Centrar texto
+      textcolor: '000000',   // Color del texto
+    }, (err, png) => {
+      if (err) reject(err);
+      else resolve(png);
+    });
+  });
+}
+
+// Función para armar el PDF de 80mm
+async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const pdfPath = path.join(ticketsDir, `pedido_${pedidoId}.pdf`);
+      
+      // 80mm de ancho son aprox. 227 puntos PostScript.
+      // Alto auto-paginado, con márgenes de 10 puntos a los lados.
+      const doc = new PDFDocument({
+        size: [227, 800], // Tamaño base (el alto se puede reajustar si es necesario, o fluye a la sig. página)
+        margins: { top: 12, bottom: 12, left: 10, right: 10 }
+      });
+
+      const writeStream = fs.createWriteStream(pdfPath);
+      doc.pipe(writeStream);
+
+      // --- Encabezado ---
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('es-MX');
+      const timeStr = now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+      
+      doc.font('Helvetica').fontSize(7.5).text(`Fecha: ${dateStr}   Hora: ${timeStr}`, { align: 'center' });
+      doc.moveDown(0.4);
+      
+      // Línea divisoria
+      doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke();
+      doc.moveDown(0.4);
+
+      // Datos del Pedido
+      doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`);
+      if (clienteNombre) {
+        doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`);
+      }
+      doc.moveDown(0.4);
+      
+      // Línea divisoria
+      doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke();
+      doc.moveDown(0.4);
+
+      // Helper to draw table header
+      const drawTableHeader = () => {
+        const startY = doc.y;
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.text('Pasillo', 10, startY, { width: 45 });
+        doc.text('Cajón', 58, startY, { width: 45 });
+        doc.text('SKU', 106, startY, { width: 64 });
+        doc.text('Cant', 173, startY, { width: 44, align: 'right' });
+        
+        doc.y = startY + 10;
+        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#475569');
+        doc.moveDown(0.3);
+      };
+
+      // --- Productos Ordenados (Ruta Lógica) ---
+      const rutas = rutaData.rutas || [];
+      if (rutas.length === 0) {
+        doc.font('Helvetica-Oblique').fontSize(8).text('No hay productos en la ruta lógica.');
+        doc.moveDown(0.5);
+      } else {
+        rutas.forEach((piso) => {
+          // Nombre del Piso (e.g. Bodega 1)
+          doc.font('Helvetica-Bold').fontSize(9).text(`${piso.piso_nombre || 'Bodega'}:`, { underline: true });
+          doc.moveDown(0.3);
+
+          drawTableHeader();
+
+          const items = piso.items || [];
+          items.forEach((item) => {
+            let pasilloText = '';
+            let cajonText = '';
+
+            if (item.tipo_ubicacion === 'cuarto') {
+              pasilloText = 'Cto.';
+              cajonText = item.cuarto_nombre || 'Cuarto';
+            } else {
+              pasilloText = String(item.pasillo_numero || '-');
+              cajonText = item.ubicacion_visible || item.cajon || 'Cajón';
+            }
+
+            // Truncar cajonText si es muy largo para evitar encimar texto
+            if (cajonText.length > 8) {
+              cajonText = cajonText.substring(0, 7) + '.';
+            }
+
+            const startY = doc.y;
+            doc.font('Helvetica-Bold').fontSize(8);
+            doc.text(pasilloText, 10, startY, { width: 45, lineBreak: false });
+            doc.text(cajonText, 58, startY, { width: 45, lineBreak: false });
+            doc.text(item.sku || '', 106, startY, { width: 64, lineBreak: false });
+            doc.text(String(item.cantidad_solicitada || 0), 173, startY, { width: 44, align: 'right', lineBreak: false });
+
+            doc.y = startY + 13;
+            doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
+            doc.moveDown(0.3);
+            
+            doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
+            doc.moveDown(0.3);
+          });
+          doc.moveDown(0.2);
+        });
+      }
+
+      // --- Productos Sin Ubicación ---
+      const itemsSinUbicacion = rutaData.sin_ubicacion || [];
+      if (itemsSinUbicacion.length > 0) {
+        doc.moveDown(0.2);
+        doc.font('Helvetica-Bold').fontSize(9).text('SIN UBICACIÓN REGISTRADA:', { underline: true });
+        doc.moveDown(0.3);
+
+        itemsSinUbicacion.forEach((item) => {
+          const startY = doc.y;
+          doc.font('Helvetica-Bold').fontSize(8);
+          doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 120, lineBreak: false });
+          doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 130, startY, { width: 87, align: 'right', lineBreak: false });
+
+          doc.y = startY + 13;
+          doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
+          doc.moveDown(0.3);
+          
+          doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
+          doc.moveDown(0.3);
+        });
+      }
+
+      doc.moveDown(0.6);
+      doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#000000');
+      doc.moveDown(0.6);
+
+      // --- Código de Barras al Pie ---
+      try {
+        const barcodeBuffer = await generateBarcodeBuffer(pedidoId);
+        // Centrar código de barras (el código tiene 150 puntos de ancho)
+        const barcodeWidth = 150;
+        const xPos = (227 - barcodeWidth) / 2;
+        doc.image(barcodeBuffer, xPos, doc.y, { width: barcodeWidth });
+      } catch (barcodeErr) {
+        console.error('Error al generar código de barras para PDF:', barcodeErr);
+        doc.font('Helvetica').fontSize(8).text(`Error de Código de Barras. ID: ${pedidoId}`, { align: 'center' });
+      }
+
+      // Finalizar PDF
+      doc.end();
+
+      writeStream.on('finish', () => resolve(pdfPath));
+      writeStream.on('error', (err) => reject(err));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// Función principal de procesamiento de pedido
+async function procesarPedido(row) {
+  const pedidoId = String(row.pedido || '').trim();
+  console.log(`[${new Date().toLocaleTimeString()}] Procesando nuevo pedido recibido: #${pedidoId}...`);
+
+  if (!pedidoId) {
+    console.warn('Advertencia: El pedido recibido no contiene un identificador de pedido válido.');
+    return;
+  }
+
+  try {
+    // 1. Iniciar sesión en la API y obtener token JWT
+    console.log('Autenticando contra Supabase...');
+    const token = await getApiAuthToken();
+
+    // 2. Consultar la API para obtener el cálculo de ruta ordenada
+    console.log(`Consultando ruta optimizada para pedido #${pedidoId} en API...`);
+    const rutaData = await fetchPickingRoute(pedidoId, token);
+    
+    // Obtener el nombre del cliente de los datos de productos
+    let clienteNombre = '';
+    try {
+      const productosJson = typeof row.productos === 'string' ? JSON.parse(row.productos) : row.productos;
+      clienteNombre = productosJson?.nombre || '';
+    } catch (e) {
+      // Ignorar errores de parseo de JSON
+    }
+
+    if (DRY_RUN === 'true') {
+      const totalRuta = (rutaData.rutas || []).reduce((acc, piso) => acc + (piso.items || []).length, 0);
+      const totalSinRuta = (rutaData.sin_ubicacion || []).length;
+      console.log('--- MODO SIMULACIÓN ---');
+      console.log(`Pedido ID: ${pedidoId}`);
+      console.log(`Cliente: ${clienteNombre}`);
+      console.log(`Items en Ruta: ${totalRuta}`);
+      console.log(`Items Sin Ruta: ${totalSinRuta}`);
+      console.log('-----------------------');
+      return;
+    }
+
+    // 3. Generar el archivo PDF
+    console.log('Generando archivo PDF del ticket...');
+    const pdfPath = await createTicketPdf(pedidoId, clienteNombre, rutaData);
+    console.log(`✅ ¡Éxito! Ticket PDF generado exitosamente en: ${pdfPath}`);
+    console.log('--------------------------------------------------');
+
+  } catch (error) {
+    console.error(`❌ Error al procesar el pedido #${pedidoId}:`, error.message);
+    console.log('--------------------------------------------------');
+  }
+}
+
+// Suscribirse a la base de datos en tiempo real
+console.log(`Conectando a Supabase Realtime → tabla: ${PEDIDOS_TABLE}...`);
+const channelName = `realtime:${PEDIDOS_TABLE}`;
+const channel = supabase
+  .channel(channelName)
+  .on(
+    'postgres_changes',
+    {
+      event: 'INSERT',
+      schema: 'public',
+      table: PEDIDOS_TABLE
+    },
+    (payload) => {
+      // Un nuevo pedido fue insertado
+      void procesarPedido(payload.new);
+    }
+  )
+  .subscribe((status) => {
+    if (status === 'SUBSCRIBED') {
+      console.log(`✅ ¡Suscrito con éxito a Supabase Realtime → ${PEDIDOS_TABLE}!`);
+      console.log('Esperando nuevos pedidos...');
+    } else {
+      console.log(`Estado de suscripción: ${status}`);
+    }
+  });
+
+// Mantener el proceso vivo y manejar salida limpia
+process.on('SIGINT', () => {
+  console.log('\nCerrando conexión y saliendo...');
+  void supabase.channel(channelName).unsubscribe();
+  process.exit(0);
+});

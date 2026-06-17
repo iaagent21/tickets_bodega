@@ -158,10 +158,10 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
       const drawTableHeader = () => {
         const startY = doc.y;
         doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Pasillo', 10, startY, { width: 40 });
-        doc.text('Cajón', 52, startY, { width: 45 });
-        doc.text('SKU', 98, startY, { width: 64 });
-        doc.text('Cant', 162, startY, { width: 44, align: 'right' });
+        doc.text('Pasillo', 10, startY, { width: 32 });
+        doc.text('Cajón', 45, startY, { width: 42 });
+        doc.text('SKU', 90, startY, { width: 62 });
+        doc.text('Cant', 152, startY, { width: 35, align: 'right' });
         
         doc.y = startY + 10;
         doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#475569');
@@ -201,10 +201,10 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
 
             const startY = doc.y;
             doc.font('Helvetica-Bold').fontSize(8);
-            doc.text(pasilloText, 10, startY, { width: 40, lineBreak: false });
-            doc.text(cajonText, 52, startY, { width: 45, lineBreak: false });
-            doc.text(item.sku || '', 98, startY, { width: 64, lineBreak: false });
-            doc.text(String(item.cantidad_solicitada || 0), 162, startY, { width: 44, align: 'right', lineBreak: false });
+            doc.text(pasilloText, 10, startY, { width: 32, lineBreak: false });
+            doc.text(cajonText, 45, startY, { width: 42, lineBreak: false });
+            doc.text(item.sku || '', 90, startY, { width: 62, lineBreak: false });
+            doc.text(String(item.cantidad_solicitada || 0), 152, startY, { width: 35, align: 'right', lineBreak: false });
 
             doc.y = startY + 13;
             doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });

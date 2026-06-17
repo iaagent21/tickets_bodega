@@ -136,10 +136,10 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
       const drawTableHeader = () => {
         const startY = doc.y;
         doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Pasillo', 10, startY, { width: 45 });
-        doc.text('Cajón', 58, startY, { width: 45 });
-        doc.text('SKU', 106, startY, { width: 64 });
-        doc.text('Cant', 173, startY, { width: 44, align: 'right' });
+        doc.text('Pasillo', 10, startY, { width: 40 });
+        doc.text('Cajón', 52, startY, { width: 45 });
+        doc.text('SKU', 98, startY, { width: 64 });
+        doc.text('Cant', 162, startY, { width: 44, align: 'right' });
         
         doc.y = startY + 10;
         doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#475569');
@@ -179,10 +179,10 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
 
             const startY = doc.y;
             doc.font('Helvetica-Bold').fontSize(8);
-            doc.text(pasilloText, 10, startY, { width: 45, lineBreak: false });
-            doc.text(cajonText, 58, startY, { width: 45, lineBreak: false });
-            doc.text(item.sku || '', 106, startY, { width: 64, lineBreak: false });
-            doc.text(String(item.cantidad_solicitada || 0), 173, startY, { width: 44, align: 'right', lineBreak: false });
+            doc.text(pasilloText, 10, startY, { width: 40, lineBreak: false });
+            doc.text(cajonText, 52, startY, { width: 45, lineBreak: false });
+            doc.text(item.sku || '', 98, startY, { width: 64, lineBreak: false });
+            doc.text(String(item.cantidad_solicitada || 0), 162, startY, { width: 44, align: 'right', lineBreak: false });
 
             doc.y = startY + 13;
             doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
@@ -224,7 +224,8 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
       // --- Código de Barras ---
       try {
         const barcodeBuffer = await generateBarcodeBuffer(pedidoId);
-        const barcodeWidth = 150;
+        // Hacer un ~30% más chico: 150 * 0.7 = 105 de ancho
+        const barcodeWidth = 105;
         const xPos = (227 - barcodeWidth) / 2;
         doc.image(barcodeBuffer, xPos, doc.y, { width: barcodeWidth });
       } catch (barcodeErr) {

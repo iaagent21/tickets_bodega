@@ -152,7 +152,14 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
         doc.font('Helvetica-Oblique').fontSize(8).text('No hay productos en la ruta lógica.');
         doc.moveDown(0.5);
       } else {
-        rutas.forEach((piso) => {
+        rutas.forEach((piso, index) => {
+          // Si es el segundo piso en adelante, dibujamos una línea divisoria antes
+          if (index > 0) {
+            doc.moveDown(0.4);
+            doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
+            doc.moveDown(0.4);
+          }
+
           // Nombre del Piso (e.g. Bodega 1)
           doc.font('Helvetica-Bold').fontSize(9).text(`${piso.piso_nombre || 'Bodega'}:`, { underline: true });
           doc.moveDown(0.3);
@@ -198,15 +205,20 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
       // --- Productos Sin Ubicación ---
       const itemsSinUbicacion = rutaData.sin_ubicacion || [];
       if (itemsSinUbicacion.length > 0) {
-        doc.moveDown(0.2);
+        doc.moveDown(0.4);
+        // Línea divisoria antes de "Sin Ubicación"
+        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
+        doc.moveDown(0.4);
+
         doc.font('Helvetica-Bold').fontSize(9).text('SIN UBICACIÓN REGISTRADA:', { underline: true });
         doc.moveDown(0.3);
 
         itemsSinUbicacion.forEach((item) => {
           const startY = doc.y;
           doc.font('Helvetica-Bold').fontSize(8);
-          doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 120, lineBreak: false });
-          doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 130, startY, { width: 87, align: 'right', lineBreak: false });
+          // SKU a la izquierda, Cantidad más pegada a la izquierda
+          doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 100, lineBreak: false });
+          doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 120, startY, { width: 50, lineBreak: false });
 
           doc.y = startY + 13;
           doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });

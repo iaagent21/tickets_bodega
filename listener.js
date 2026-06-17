@@ -6,6 +6,7 @@ const ws = require('ws');
 const fetch = require('node-fetch');
 const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
+const { print } = require('pdf-to-printer');
 
 // Cargar variables de entorno
 require('dotenv').config();
@@ -20,6 +21,9 @@ const {
   // Configuración de tienda — cambiar estos valores para adaptar a otra tienda
   PEDIDOS_TABLE,         // Nombre de la tabla en Supabase, ej: pedidos_la4ta
   TIENDA,                // Identificador de tienda para la API, ej: la4ta
+  // Configuración de Impresora
+  AUTO_PRINT,            // true o false
+  PRINTER_NAME,          // Nombre exacto de la impresora en Windows, vacío para predeterminada
 } = process.env;
 
 // Validar variables requeridas
@@ -56,6 +60,10 @@ console.log(`   Tienda: ${TIENDA}`);
 console.log(`   Tabla Supabase: ${PEDIDOS_TABLE}`);
 console.log(`   Servidor API: ${API_URL}`);
 console.log(`   Modo Simulación: ${DRY_RUN === 'true' ? 'ACTIVADO' : 'DESACTIVADO'}`);
+console.log(`   Impresión Automática: ${AUTO_PRINT === 'true' ? 'ACTIVADA' : 'DESACTIVADA'}`);
+if (AUTO_PRINT === 'true') {
+  console.log(`   Impresora Destino: ${PRINTER_NAME || 'Predeterminada del sistema'}`);
+}
 console.log('==================================================');
 
 // Función para iniciar sesión y obtener token JWT de Supabase
@@ -302,6 +310,15 @@ async function procesarPedido(row) {
     console.log('Generando archivo PDF del ticket...');
     const pdfPath = await createTicketPdf(pedidoId, clienteNombre, rutaData);
     console.log(`✅ ¡Éxito! Ticket PDF generado exitosamente en: ${pdfPath}`);
+
+    // 4. Impresión Automática si está configurada
+    if (AUTO_PRINT === 'true') {
+      console.log('Enviando ticket a la impresora...');
+      const options = PRINTER_NAME ? { printer: PRINTER_NAME } : {};
+      await print(pdfPath, options);
+      console.log(`🖨️  ¡Éxito! Ticket enviado a la impresora: ${PRINTER_NAME || 'Predeterminada'}`);
+    }
+
     console.log('--------------------------------------------------');
 
   } catch (error) {

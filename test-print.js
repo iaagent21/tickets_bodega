@@ -4,6 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const fetch = require('node-fetch');
 const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
+const { print } = require('pdf-to-printer');
 
 // Cargar variables de entorno
 require('dotenv').config();
@@ -16,6 +17,8 @@ const {
   API_URL,
   PEDIDOS_TABLE,
   TIENDA,
+  AUTO_PRINT,
+  PRINTER_NAME,
 } = process.env;
 
 // Validar variables
@@ -272,6 +275,14 @@ async function main() {
     console.log('Generando PDF...');
     const pdfPath = await createTicketPdf(pedidoId, clienteNombre, rutaData);
     console.log(`\n✅ ¡Prueba exitosa! Archivo PDF guardado en: ${pdfPath}`);
+
+    // 4. Impresión Automática si está configurada
+    if (AUTO_PRINT === 'true') {
+      console.log('Enviando ticket a la impresora...');
+      const options = PRINTER_NAME ? { printer: PRINTER_NAME } : {};
+      await print(pdfPath, options);
+      console.log(`🖨️  ¡Éxito! Ticket enviado a la impresora: ${PRINTER_NAME || 'Predeterminada'}`);
+    }
   } catch (err) {
     console.error('❌ Error durante la prueba:', err.message);
   }

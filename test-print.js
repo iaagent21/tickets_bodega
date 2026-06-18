@@ -172,7 +172,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
             let cajonText = '';
 
             if (item.tipo_ubicacion === 'cuarto') {
-              pasilloText = 'Cto.';
+              pasilloText = 'CTO';
               cajonText = item.cuarto_nombre || 'Cuarto';
             } else {
               pasilloText = String(item.pasillo_numero || '-');

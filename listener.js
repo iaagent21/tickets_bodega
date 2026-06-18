@@ -188,7 +188,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
 
           drawTableHeader();
 
-          const items = piso.items || [];
+          const items = [...(piso.items || []), ...(piso.sin_ruta || [])];
           items.forEach((item) => {
             let pasilloText = '';
             let cajonText = '';
@@ -307,7 +307,7 @@ async function procesarPedido(row) {
     }
 
     if (DRY_RUN === 'true') {
-      const totalRuta = (rutaData.rutas || []).reduce((acc, piso) => acc + (piso.items || []).length, 0);
+      const totalRuta = (rutaData.rutas || []).reduce((acc, piso) => acc + (piso.items || []).length + (piso.sin_ruta || []).length, 0);
       const totalSinRuta = (rutaData.sin_ubicacion || []).length;
       console.log('--- MODO SIMULACIÓN ---');
       console.log(`Pedido ID: ${pedidoId}`);

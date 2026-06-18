@@ -166,7 +166,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
 
           drawTableHeader();
 
-          const items = piso.items || [];
+          const items = [...(piso.items || []), ...(piso.sin_ruta || [])];
           items.forEach((item) => {
             let pasilloText = '';
             let cajonText = '';

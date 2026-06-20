@@ -229,6 +229,32 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
         });
       }
 
+      // --- Cambios (Cantidades Negativas) ---
+      const itemsCambios = rutaData.cambios || [];
+      if (itemsCambios.length > 0) {
+        doc.moveDown(0.4);
+        // Línea divisoria antes de "Cambios"
+        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
+        doc.moveDown(0.4);
+
+        doc.font('Helvetica-Bold').fontSize(9).text('CAMBIOS:', { underline: true });
+        doc.moveDown(0.3);
+
+        itemsCambios.forEach((item) => {
+          const startY = doc.y;
+          doc.font('Helvetica-Bold').fontSize(8);
+          doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 100, lineBreak: false });
+          doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 120, startY, { width: 50, lineBreak: false });
+
+          doc.y = startY + 13;
+          doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
+          doc.moveDown(0.3);
+          
+          doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
+          doc.moveDown(0.3);
+        });
+      }
+
       doc.moveDown(0.6);
       doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#000000');
       doc.moveDown(0.6);

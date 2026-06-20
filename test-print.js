@@ -175,7 +175,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
               pasilloText = 'CTO';
               cajonText = item.cuarto_nombre || 'Cuarto';
             } else {
-              pasilloText = String(item.pasillo_numero || '-');
+              pasilloText = item.pasillo_numero ? String(item.pasillo_numero) : '';
               cajonText = item.ubicacion_visible || item.cajon || 'Cajón';
             }
 

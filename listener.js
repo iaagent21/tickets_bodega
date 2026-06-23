@@ -201,6 +201,11 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
               cajonText = item.ubicacion_visible || item.cajon || 'Cajón';
             }
 
+            // Abreviar Tapanco para ahorrar espacio y evitar truncamiento
+            if (cajonText.startsWith('Tapanco ')) {
+              cajonText = cajonText.replace('Tapanco ', 'Tpc ');
+            }
+
             // Truncar cajonText si es muy largo para evitar encimar texto
             if (cajonText.length > 8) {
               cajonText = cajonText.substring(0, 7) + '.';

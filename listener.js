@@ -175,8 +175,17 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
         doc.moveDown(0.5);
       } else {
         rutas.forEach((piso, index) => {
-          // Si es el segundo piso en adelante, dibujamos una línea divisoria antes
-          if (index > 0) {
+          const items = [...(piso.items || []), ...(piso.sin_ruta || [])];
+          
+          // Calcular la altura requerida para el encabezado del piso y el primer elemento
+          const firstItem = items[0];
+          const firstItemHeight = firstItem ? (18 + doc.heightOfString(firstItem.producto || 'Sin descripción', { width: 202 })) : 0;
+          const requiredFloorHeaderHeight = (index > 0 ? 21 : 15) + 12 + firstItemHeight;
+
+          if (doc.y + requiredFloorHeaderHeight > 788) {
+            doc.addPage();
+          } else if (index > 0) {
+            // Si es el segundo piso en adelante y cupo, dibujamos una línea divisoria antes
             doc.moveDown(0.4);
             doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
             doc.moveDown(0.4);
@@ -188,18 +197,9 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
 
           drawTableHeader();
 
-          const items = [...(piso.items || []), ...(piso.sin_ruta || [])];
           items.forEach((item) => {
-            let pasilloText = '';
-            let cajonText = '';
-
-            if (item.tipo_ubicacion === 'cuarto') {
-              pasilloText = 'CTO';
-              cajonText = item.cuarto_nombre || 'Cuarto';
-            } else {
-              pasilloText = item.pasillo_numero ? String(item.pasillo_numero) : '';
-              cajonText = item.ubicacion_visible || item.cajon || 'Cajón';
-            }
+            let pasilloText = item.pasillo_numero ? String(item.pasillo_numero) : '';
+            let cajonText = item.tipo_ubicacion === 'cuarto' ? (item.cuarto_nombre || 'Cuarto') : (item.ubicacion_visible || item.cajon || 'Cajón');
 
             // Abreviar Tapanco para ahorrar espacio y evitar truncamiento
             if (cajonText.startsWith('Tapanco ')) {
@@ -209,6 +209,13 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
             // Truncar cajonText si es muy largo para evitar encimar texto
             if (cajonText.length > 8) {
               cajonText = cajonText.substring(0, 7) + '.';
+            }
+
+            // Verificar si el elemento cabe en el espacio restante de la página
+            const neededHeight = 18 + doc.heightOfString(item.producto || 'Sin descripción', { width: 202 });
+            if (doc.y + neededHeight > 788) {
+              doc.addPage();
+              drawTableHeader();
             }
 
             const startY = doc.y;
@@ -232,18 +239,31 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
       // --- Productos Sin Ubicación ---
       const itemsSinUbicacion = rutaData.sin_ubicacion || [];
       if (itemsSinUbicacion.length > 0) {
-        doc.moveDown(0.4);
-        // Línea divisoria antes de "Sin Ubicación"
-        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
-        doc.moveDown(0.4);
+        const firstItem = itemsSinUbicacion[0];
+        const firstItemHeight = 18 + doc.heightOfString(firstItem.producto || 'Sin descripción', { width: 202 });
+        
+        // El divisor y el encabezado de sección toman aproximadamente 21pt
+        if (doc.y + 21 + firstItemHeight > 788) {
+          doc.addPage();
+        } else {
+          doc.moveDown(0.4);
+          doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
+          doc.moveDown(0.4);
+        }
 
         doc.font('Helvetica-Bold').fontSize(9).text('SIN UBICACIÓN REGISTRADA:', { underline: true });
         doc.moveDown(0.3);
 
         itemsSinUbicacion.forEach((item) => {
+          const neededHeight = 18 + doc.heightOfString(item.producto || 'Sin descripción', { width: 202 });
+          if (doc.y + neededHeight > 788) {
+            doc.addPage();
+            doc.font('Helvetica-Bold').fontSize(9).text('SIN UBICACIÓN REGISTRADA (Cont.):', { underline: true });
+            doc.moveDown(0.3);
+          }
+
           const startY = doc.y;
           doc.font('Helvetica-Bold').fontSize(8);
-          // SKU a la izquierda, Cantidad más pegada a la izquierda (en coord 120 en lugar de 130+align:right)
           doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 100, lineBreak: false });
           doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 120, startY, { width: 50, lineBreak: false });
 
@@ -259,15 +279,29 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
       // --- Cambios (Cantidades Negativas) ---
       const itemsCambios = rutaData.cambios || [];
       if (itemsCambios.length > 0) {
-        doc.moveDown(0.4);
-        // Línea divisoria antes de "Cambios"
-        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
-        doc.moveDown(0.4);
+        const firstItem = itemsCambios[0];
+        const firstItemHeight = 18 + doc.heightOfString(firstItem.producto || 'Sin descripción', { width: 202 });
+        
+        // El divisor y el encabezado de sección toman aproximadamente 21pt
+        if (doc.y + 21 + firstItemHeight > 788) {
+          doc.addPage();
+        } else {
+          doc.moveDown(0.4);
+          doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
+          doc.moveDown(0.4);
+        }
 
         doc.font('Helvetica-Bold').fontSize(9).text('CAMBIOS:', { underline: true });
         doc.moveDown(0.3);
 
         itemsCambios.forEach((item) => {
+          const neededHeight = 18 + doc.heightOfString(item.producto || 'Sin descripción', { width: 202 });
+          if (doc.y + neededHeight > 788) {
+            doc.addPage();
+            doc.font('Helvetica-Bold').fontSize(9).text('CAMBIOS (Cont.):', { underline: true });
+            doc.moveDown(0.3);
+          }
+
           const startY = doc.y;
           doc.font('Helvetica-Bold').fontSize(8);
           doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 100, lineBreak: false });
@@ -282,9 +316,14 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
         });
       }
 
-      doc.moveDown(0.6);
-      doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#000000');
-      doc.moveDown(0.6);
+      // Verificar si cabe el código de barras (aproximadamente 70pt)
+      if (doc.y + 70 > 788) {
+        doc.addPage();
+      } else {
+        doc.moveDown(0.6);
+        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#000000');
+        doc.moveDown(0.6);
+      }
 
       // --- Código de Barras al Pie ---
       try {

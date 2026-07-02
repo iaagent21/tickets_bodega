@@ -119,7 +119,7 @@ function generateBarcodeBuffer(text) {
 function getPasilloTicketText(item) {
   const numero = item?.pasillo_numero ? String(item.pasillo_numero).trim() : '';
   const nombre = String(item?.pasillo_nombre ?? '').trim();
-  const inicial = nombre ? nombre.charAt(0).toUpperCase() : '';
+  const inicial = nombre && nombre.toLowerCase() !== 'pasillo' ? nombre.charAt(0).toUpperCase() : '';
   return inicial && numero ? `${inicial}${numero}` : (numero || inicial);
 }
 

@@ -116,6 +116,13 @@ function generateBarcodeBuffer(text) {
 }
 
 // Función para armar el PDF de 80mm
+function getPasilloTicketText(item) {
+  const numero = item?.pasillo_numero ? String(item.pasillo_numero).trim() : '';
+  const nombre = String(item?.pasillo_nombre ?? '').trim();
+  const inicial = nombre ? nombre.charAt(0).toUpperCase() : '';
+  return inicial && numero ? `${inicial}${numero}` : (numero || inicial);
+}
+
 async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -198,7 +205,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
           drawTableHeader();
 
           items.forEach((item) => {
-            let pasilloText = item.pasillo_numero ? String(item.pasillo_numero) : '';
+            let pasilloText = getPasilloTicketText(item);
             let cajonText = item.tipo_ubicacion === 'cuarto' ? (item.cuarto_nombre || 'Cuarto') : (item.ubicacion_visible || item.cajon || 'Cajón');
 
             // Abreviar Tapanco para ahorrar espacio y evitar truncamiento

@@ -30,6 +30,8 @@ const missingVars = [
   !API_URL && 'API_URL',
   !PEDIDOS_TABLE && 'PEDIDOS_TABLE',
   !TIENDA && 'TIENDA',
+  typeof AUTO_PRINT === 'undefined' && 'AUTO_PRINT',
+  typeof PRINTER_NAME === 'undefined' && 'PRINTER_NAME',
 ].filter(Boolean);
 
 if (missingVars.length > 0) {

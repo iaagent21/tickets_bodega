@@ -171,8 +171,10 @@ function createApiClient({ apiUrl, tienda, email, password, timeoutMs = 15_000 }
     return authenticatedJson(`/picking/ruta/${encodeURIComponent(pedido)}`);
   }
 
-  async function listPendingTicketJobs({ after = null, limit = 100 } = {}) {
-    const query = new URLSearchParams({ limit: String(limit) });
+  async function listPendingTicketJobs({ clientId, after = null, limit = 100 } = {}) {
+    const normalizedClientId = String(clientId || '').trim();
+    if (!normalizedClientId) throw new Error('clientId es obligatorio para consultar tickets pendientes.');
+    const query = new URLSearchParams({ client_id: normalizedClientId, limit: String(limit) });
     if (after) query.set('after', String(after));
     const data = await authenticatedJson(`/tickets/pending?${query.toString()}`);
     if (!data || !Array.isArray(data.items)) {
@@ -205,9 +207,12 @@ function createApiClient({ apiUrl, tienda, email, password, timeoutMs = 15_000 }
     });
   }
 
-  async function openTicketStream({ lastEventId = null, signal } = {}) {
+  async function openTicketStream({ clientId, lastEventId = null, signal } = {}) {
+    const normalizedClientId = String(clientId || '').trim();
+    if (!normalizedClientId) throw new Error('clientId es obligatorio para abrir el stream de tickets.');
+    const query = new URLSearchParams({ client_id: normalizedClientId });
     let current = await getSession();
-    const open = (token) => fetch(`${baseUrl}/tickets/stream`, {
+    const open = (token) => fetch(`${baseUrl}/tickets/stream?${query.toString()}`, {
       method: 'GET',
       headers: {
         Accept: 'text/event-stream',
@@ -243,8 +248,8 @@ function createApiClient({ apiUrl, tienda, email, password, timeoutMs = 15_000 }
     return response.body;
   }
 
-  async function consumeTicketStream({ lastEventId = null, signal, onJob }) {
-    const body = await openTicketStream({ lastEventId, signal });
+  async function consumeTicketStream({ clientId, lastEventId = null, signal, onJob }) {
+    const body = await openTicketStream({ clientId, lastEventId, signal });
     const decoder = new TextDecoder();
     let buffer = '';
     let latestEventId = lastEventId;

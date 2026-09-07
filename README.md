@@ -9,21 +9,21 @@ La PC de tickets se comunica únicamente con la API. No necesita acceso directo 
 - Windows con la impresora térmica instalada y funcionando.
 - Node.js 18 o superior.
 - Usuario de la API con acceso a la aplicación `etiquetas` y a la tienda correspondiente.
-- API de EscanersGlobal disponible y con las migraciones de tickets aplicadas (`068`, `069` y `070`).
+- API de EscanersGlobal disponible y con las migraciones de tickets aplicadas (`068`, `069`, `070` y `071`).
 - Conectividad permanente entre esta PC y `API_URL`.
 
 ## Qué hace el servicio
 
 1. Inicia sesión en la API con `/auth/login` y renueva la sesión con `/auth/refresh`.
 2. Escucha `GET /tickets/stream` mediante SSE.
-3. Recupera periódicamente `GET /tickets/pending`, incluyendo jobs fallidos y leases vencidos.
+3. Recupera periódicamente `GET /tickets/pending` para su `TICKET_CLIENT_ID`, incluyendo jobs fallidos y leases vencidos.
 4. Reclama cada job con `POST /tickets/jobs/:id/claim` antes de procesarlo.
 5. Consulta `GET /picking/ruta/{pedido}`.
 6. Genera el PDF con todos los productos recibidos, mostrando la vendedora arriba del pedido y el total antes del código de barras cuando están informados.
 7. Imprime el ticket y confirma con `POST /tickets/jobs/:id/printed`.
 8. Si ocurre un error antes de imprimir, reporta `POST /tickets/jobs/:id/failed`.
 
-La deduplicación se realiza por `job_id`. Si la PC se desconecta, el API conserva el job y el servicio lo recupera al reconectar o durante el sondeo de pendientes.
+La deduplicación se realiza por `(job_id, TICKET_CLIENT_ID)`. Cada PC de la misma tienda recibe su propia entrega, por lo que puede imprimir el mismo ticket que otras PCs sin bloquearlas. Si una PC se desconecta, el API conserva su entrega y el servicio la recupera al reconectar o durante el sondeo de pendientes.
 
 ## Ningún producto se omite
 
@@ -84,7 +84,7 @@ AUTO_PRINT=true
 # Vacío = impresora predeterminada de Windows.
 PRINTER_NAME=
 
-# Lease para evitar que dos PCs procesen el mismo job.
+# Lease para evitar duplicados dentro de la misma PC.
 LEASE_SECONDS=120
 
 # Cada cuánto se recuperan jobs pendientes o leases vencidos.
@@ -186,7 +186,7 @@ Verifica `STORE_USER_EMAIL`, `STORE_USER_PASSWORD`, `TIENDA` y que el usuario te
 
 ### No llegan tickets
 
-Verifica que `API_URL` sea correcta, que la API esté disponible y que las migraciones `068`, `069` y `070` estén aplicadas. El servicio también consulta `/tickets/pending`, por lo que un pedido creado durante una desconexión debe recuperarse.
+Verifica que `API_URL` sea correcta, que la API esté disponible y que las migraciones `068`, `069`, `070` y `071` estén aplicadas. El servicio también consulta `/tickets/pending` con su `TICKET_CLIENT_ID`, por lo que un pedido creado durante una desconexión debe recuperarse para esa PC.
 
 ### La impresora no responde
 

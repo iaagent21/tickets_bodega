@@ -205,7 +205,7 @@ async function processJob(job, apiClient, previewedJobs) {
     } catch (error) {
       if (isClaimConflict(error)) {
         updateJobState(job, 'busy');
-        console.log(`Job ${job.id} está siendo procesado por otra PC; se deja para su lease.`);
+        console.log(`Job ${job.id} está ocupado para esta PC; se deja para su lease.`);
         return;
       }
       if (isJobGone(error)) {
@@ -218,7 +218,7 @@ async function processJob(job, apiClient, previewedJobs) {
 
     if (claim?.reason === 'busy') {
       updateJobState(job, 'busy');
-      console.log(`Job ${job.id} está ocupado por otra PC.`);
+      console.log(`Job ${job.id} está ocupado para esta PC.`);
       return;
     }
     if (claim?.reason === 'printed') {
@@ -346,7 +346,7 @@ async function main() {
     while (!stopping) {
       pages += 1;
       if (pages > 10_000) throw new Error('La recuperación de tickets excedió el límite de páginas.');
-      const page = await apiClient.listPendingTicketJobs({ after, limit: 100 });
+      const page = await apiClient.listPendingTicketJobs({ clientId, after, limit: 100 });
       page.items.forEach((job) => queue.enqueue(job, source));
       if (!page.nextCursor) return;
       if (page.nextCursor === after) throw new Error('El cursor de tickets no avanzó.');
@@ -360,6 +360,7 @@ async function main() {
       streamAbort = new AbortController();
       try {
         lastEventId = await apiClient.consumeTicketStream({
+          clientId,
           lastEventId,
           signal: streamAbort.signal,
           onJob: async (job) => queue.enqueue(job, 'SSE'),

@@ -74,6 +74,11 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const pageBottom = PAGE_HEIGHT - PAGE_MARGINS.bottom;
   let renderedItems = 0;
 
+  const drawDivider = (color = '#94a3b8') => {
+    doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke(color);
+    doc.moveDown(0.4);
+  };
+
   const drawTableHeader = () => {
     const startY = doc.y;
     doc.font('Helvetica-Bold').fontSize(8);
@@ -86,8 +91,13 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
     doc.moveDown(0.3);
   };
 
-  const drawSectionTitle = (title, continuation = false) => {
-    doc.font('Helvetica-Bold').fontSize(9).text(`${title}${continuation ? ' (Cont.)' : ''}:`, { underline: true });
+  const drawSectionTitle = (title, continuation = false, withColon = true) => {
+    const suffix = continuation ? ' (Cont.)' : '';
+    const colon = withColon ? ':' : '';
+    doc.font('Helvetica-Bold').fontSize(9).text(`${title}${suffix}${colon}`, 10, doc.y, {
+      width: 207,
+      underline: true,
+    });
     doc.moveDown(0.3);
   };
 
@@ -152,11 +162,14 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const now = new Date();
   doc.font('Helvetica').fontSize(7.5).text(
     `Fecha: ${now.toLocaleDateString('es-MX')}   Hora: ${now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}`,
-    { align: 'center' },
+    10,
+    doc.y,
+    { width: 207, align: 'center' },
   );
   doc.moveDown(0.4);
-  doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`);
-  if (clienteNombre) doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`);
+  drawDivider('#94a3b8');
+  doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`, 10, doc.y, { width: 207 });
+  if (clienteNombre) doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`, 10, doc.y, { width: 207 });
   doc.moveDown(0.4);
 
   const rutas = asItems(rutaData.rutas);
@@ -180,8 +193,8 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const sinRutaYSinUbicacion = [...sinRutaItems, ...asItems(rutaData.sin_ubicacion)];
   if (sinRutaYSinUbicacion.length > 0) {
     if (doc.y + 45 > pageBottom) doc.addPage();
-    else doc.moveDown(0.5);
-    drawSectionTitle('SIN RUTA O UBICACIÓN REGISTRADA');
+    else drawDivider('#94a3b8');
+    drawSectionTitle('Sin ubicacion', false, false);
     drawTableHeader();
     sinRutaYSinUbicacion.forEach(renderRouteItem);
   }

@@ -19,7 +19,7 @@ La PC de tickets se comunica únicamente con la API. No necesita acceso directo 
 3. Recupera periódicamente `GET /tickets/pending`, incluyendo jobs fallidos y leases vencidos.
 4. Reclama cada job con `POST /tickets/jobs/:id/claim` antes de procesarlo.
 5. Consulta `GET /picking/ruta/{pedido}`.
-6. Genera el PDF con todos los productos recibidos.
+6. Genera el PDF con todos los productos recibidos, mostrando la vendedora arriba del pedido y el total antes del código de barras cuando están informados.
 7. Imprime el ticket y confirma con `POST /tickets/jobs/:id/printed`.
 8. Si ocurre un error antes de imprimir, reporta `POST /tickets/jobs/:id/failed`.
 
@@ -36,6 +36,10 @@ El PDF imprime todas las categorías de la respuesta de la API:
 - `cambios`.
 
 No se filtra ningún producto por piso, ubicación, layout o modo de picking. Si la cantidad recibida no coincide con el resumen de la API, el servicio deja una advertencia y conserva todas las líneas recibidas.
+
+## Datos comerciales
+
+La API devuelve `vendedora` y `total_documento` dentro de la respuesta de `/picking/ruta/{pedido}`. El PDF imprime `Vendedora: ...` arriba de `Pedido: ...` y `Total: $...` entre separadores antes del código de barras. Si alguno de los campos es `null`, se omite sólo ese dato y el resto del ticket continúa siendo válido.
 
 ## Instalación en Windows
 

@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node listener.js",
+    "test": "node --test test/*.test.js",
     "test-print": "node test-print.js"
   },
   "dependencies": {

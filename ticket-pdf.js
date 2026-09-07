@@ -45,6 +45,22 @@ function getSku(item) {
   return String(item?.sku ?? '').trim();
 }
 
+function getSellerName(rutaData) {
+  return String(rutaData?.vendedora ?? '').trim();
+}
+
+function formatDocumentTotal(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const total = Number(value);
+  if (!Number.isFinite(total)) return null;
+  return new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(total);
+}
+
 function getSimpleLocation(item) {
   if (item?.tipo_ubicacion === 'cuarto') return item?.cuarto_nombre || 'Cuarto';
   return item?.ubicacion_visible || item?.cajon || '';
@@ -168,6 +184,10 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   );
   doc.moveDown(0.4);
   drawDivider('#94a3b8');
+  const sellerName = getSellerName(rutaData);
+  if (sellerName) {
+    doc.font('Helvetica').fontSize(8).text(`Vendedora: ${sellerName}`, 10, doc.y, { width: 207 });
+  }
   doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`, 10, doc.y, { width: 207 });
   if (clienteNombre) doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`, 10, doc.y, { width: 207 });
   doc.moveDown(0.4);
@@ -208,8 +228,19 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const changesCount = asItems(rutaData.cambios).length;
   const expectedPositive = Number(rutaData.resumen?.total_items_surtibles);
   const expectedTotal = Number.isFinite(expectedPositive) ? expectedPositive + changesCount : null;
-  if (doc.y + 75 > pageBottom) doc.addPage();
-  else drawDivider('#94a3b8');
+  const formattedTotal = formatDocumentTotal(rutaData.total_documento);
+  if (doc.y + (formattedTotal ? 95 : 75) > pageBottom) doc.addPage();
+  // El total siempre queda entre dos separadores, incluso si por falta de
+  // espacio debe comenzar en una página nueva.
+  drawDivider('#94a3b8');
+  if (formattedTotal) {
+    doc.font('Helvetica-Bold').fontSize(8.5).text(`Total: ${formattedTotal}`, 10, doc.y, {
+      width: 207,
+      align: 'center',
+    });
+    doc.moveDown(0.4);
+    drawDivider('#94a3b8');
+  }
   if (barcodeBuffer) {
     const barcodeWidth = 105;
     const barcodeTop = doc.y;
@@ -258,4 +289,4 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
   });
 }
 
-module.exports = { createTicketPdf };
+module.exports = { createTicketPdf, renderTicketContent };

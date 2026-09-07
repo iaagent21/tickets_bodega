@@ -4,8 +4,8 @@ const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
 
 const PAGE_WIDTH = 227; // 80 mm en puntos PDF.
+const PAGE_HEIGHT = 800; // Largo original por página, aproximadamente 28.2 cm.
 const PAGE_MARGINS = { top: 12, bottom: 12, left: 10, right: 10 };
-const MEASURE_PAGE_HEIGHT = 1_000_000;
 
 function generateBarcodeBuffer(text) {
   return new Promise((resolve, reject) => {
@@ -59,19 +59,19 @@ function asItems(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function createPdfDocument(height) {
+function createPdfDocument() {
   return new PDFDocument({
-    // El ancho es fijo a 80 mm; la altura se calcula en dos pasadas según el
-    // contenido real del pedido.
-    size: [PAGE_WIDTH, height],
+    // Mantener exactamente el formato que ya funcionaba en la impresora:
+    // 80 mm de ancho por 800 puntos de largo en cada página.
+    size: [PAGE_WIDTH, PAGE_HEIGHT],
     margins: PAGE_MARGINS,
   });
 }
 
 function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuffer) {
-  // La altura final se calcula después de dibujar todo. No se crean páginas
-  // intermedias: el ticket térmico es una sola tira de 80 mm de ancho.
-  const pageBottom = Number.POSITIVE_INFINITY;
+  // Cada página conserva el tamaño original. Los pedidos largos continúan en
+  // otra página del mismo formato para no cortar ni omitir productos.
+  const pageBottom = PAGE_HEIGHT - PAGE_MARGINS.bottom;
   let renderedItems = 0;
 
   const drawTableHeader = () => {
@@ -179,7 +179,8 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   // tiene ubicación registrada.
   const sinRutaYSinUbicacion = [...sinRutaItems, ...asItems(rutaData.sin_ubicacion)];
   if (sinRutaYSinUbicacion.length > 0) {
-    doc.moveDown(0.5);
+    if (doc.y + 45 > pageBottom) doc.addPage();
+    else doc.moveDown(0.5);
     drawSectionTitle('SIN RUTA O UBICACIÓN REGISTRADA');
     drawTableHeader();
     sinRutaYSinUbicacion.forEach(renderRouteItem);
@@ -193,7 +194,8 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const changesCount = asItems(rutaData.cambios).length;
   const expectedPositive = Number(rutaData.resumen?.total_items_surtibles);
   const expectedTotal = Number.isFinite(expectedPositive) ? expectedPositive + changesCount : null;
-  doc.moveDown(0.5);
+  if (doc.y + 75 > pageBottom) doc.addPage();
+  else doc.moveDown(0.5);
   if (barcodeBuffer) {
     const barcodeWidth = 105;
     const barcodeTop = doc.y;
@@ -207,7 +209,6 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   return {
     renderedItems,
     expectedTotal,
-    height: Math.max(100, Math.ceil(doc.y + PAGE_MARGINS.bottom)),
   };
 }
 
@@ -225,13 +226,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
     console.error('No se pudo generar el código de barras:', error.message);
   }
 
-  // Primera pasada: medimos el contenido. Segunda pasada: creamos el PDF con
-  // exactamente la altura necesaria para el rollo térmico.
-  const measureDoc = createPdfDocument(MEASURE_PAGE_HEIGHT);
-  const measured = renderTicketContent(measureDoc, pedidoId, clienteNombre, rutaData, barcodeBuffer);
-  measureDoc.end();
-
-  const doc = createPdfDocument(measured.height);
+  const doc = createPdfDocument();
   const writeStream = fs.createWriteStream(pdfPath);
   doc.pipe(writeStream);
   const rendered = renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuffer);
@@ -242,7 +237,7 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
       renderedItems: rendered.renderedItems,
       expectedTotal: rendered.expectedTotal,
       pageWidth: PAGE_WIDTH,
-      pageHeight: measured.height,
+      pageHeight: PAGE_HEIGHT,
     }));
     writeStream.on('error', reject);
     doc.end();

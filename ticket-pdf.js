@@ -74,11 +74,6 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const pageBottom = Number.POSITIVE_INFINITY;
   let renderedItems = 0;
 
-  const drawDivider = (color = '#94a3b8') => {
-    doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke(color);
-    doc.moveDown(0.4);
-  };
-
   const drawTableHeader = () => {
     const startY = doc.y;
     doc.font('Helvetica-Bold').fontSize(8);
@@ -122,9 +117,7 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
     doc.text(getQuantity(item), 152, startY, { width: 35, align: 'right', lineBreak: false });
     doc.y = startY + 13;
     doc.font('Helvetica').fontSize(7.5).text(getDescription(item), 15, doc.y, { width: 202 });
-    doc.moveDown(0.3);
-    doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
-    doc.moveDown(0.3);
+    doc.moveDown(0.6);
     renderedItems += 1;
   };
 
@@ -151,7 +144,7 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
     const list = asItems(items);
     if (list.length === 0) return;
     if (doc.y + 45 > pageBottom) doc.addPage();
-    else drawDivider();
+    else doc.moveDown(0.5);
     drawSectionTitle(title);
     list.forEach(renderSimpleItem);
   };
@@ -162,68 +155,45 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
     { align: 'center' },
   );
   doc.moveDown(0.4);
-  drawDivider('#000000');
   doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`);
   if (clienteNombre) doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`);
   doc.moveDown(0.4);
-  drawDivider('#000000');
 
   const rutas = asItems(rutaData.rutas);
+  const sinRutaItems = [];
   for (const piso of rutas) {
     const routeItems = asItems(piso?.items);
     const noRouteItems = asItems(piso?.sin_ruta);
-    if (routeItems.length === 0 && noRouteItems.length === 0) continue;
+    sinRutaItems.push(...noRouteItems);
+    if (routeItems.length === 0) continue;
 
     if (doc.y + 48 > pageBottom) doc.addPage();
-    else if (doc.y > 35) drawDivider();
+    else if (doc.y > 35) doc.moveDown(0.5);
     drawSectionTitle(piso?.piso_nombre || 'Bodega');
     drawTableHeader();
     routeItems.forEach(renderRouteItem);
-
-    if (noRouteItems.length > 0) {
-      if (doc.y + 30 > pageBottom) doc.addPage();
-      else drawDivider('#c2410c');
-      doc.font('Helvetica-Bold').fontSize(8).text('SIN RUTA CALCULADA:', { underline: true });
-      doc.moveDown(0.3);
-      drawTableHeader();
-      noRouteItems.forEach(renderRouteItem);
-    }
   }
 
-  // Estas tres secciones son obligatorias: ningún producto queda fuera por
-  // no tener ubicación, layout o por ser un cambio de cantidad.
-  renderSimpleSection('SIN UBICACIÓN REGISTRADA', rutaData.sin_ubicacion);
+  // Se combinan al final porque ambos grupos requieren búsqueda o atención
+  // manual: uno tiene ubicación pero no recorrido calculable y el otro no
+  // tiene ubicación registrada.
+  const sinRutaYSinUbicacion = [...sinRutaItems, ...asItems(rutaData.sin_ubicacion)];
+  if (sinRutaYSinUbicacion.length > 0) {
+    doc.moveDown(0.5);
+    drawSectionTitle('SIN RUTA O UBICACIÓN REGISTRADA');
+    drawTableHeader();
+    sinRutaYSinUbicacion.forEach(renderRouteItem);
+  }
+
+  // Estas secciones también son obligatorias: ningún producto queda fuera por
+  // no tener layout o por ser un cambio de cantidad.
   renderSimpleSection('SIN LAYOUT REGISTRADO', rutaData.sin_layout);
   renderSimpleSection('CAMBIOS', rutaData.cambios);
 
-  const routeCount = rutas.reduce((total, piso) => (
-    total + asItems(piso?.items).length + asItems(piso?.sin_ruta).length
-  ), 0);
-  const noLocationCount = asItems(rutaData.sin_ubicacion).length;
-  const noLayoutCount = asItems(rutaData.sin_layout).length;
   const changesCount = asItems(rutaData.cambios).length;
   const expectedPositive = Number(rutaData.resumen?.total_items_surtibles);
   const expectedTotal = Number.isFinite(expectedPositive) ? expectedPositive + changesCount : null;
-  const observedPositive = routeCount + noLocationCount + noLayoutCount;
-
-  if (doc.y + 65 > pageBottom) doc.addPage();
-  else drawDivider('#000000');
-  doc.font('Helvetica-Bold').fontSize(8).text(
-    expectedTotal === null
-      ? `Productos incluidos en ticket: ${renderedItems}`
-      : `Productos incluidos: ${renderedItems}/${expectedTotal}`,
-    { align: 'center' },
-  );
-  if (expectedTotal !== null && observedPositive !== expectedPositive) {
-    doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#b91c1c').text(
-      `VERIFICAR RESPUESTA API: ${observedPositive} surtibles recibidos; resumen indica ${expectedPositive}.`,
-      { align: 'center' },
-    ).fillColor('#000000');
-  }
   doc.moveDown(0.5);
-
-  if (doc.y + 75 > pageBottom) doc.addPage();
-  else drawDivider('#000000');
   if (barcodeBuffer) {
     const barcodeWidth = 105;
     const barcodeTop = doc.y;

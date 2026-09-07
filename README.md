@@ -9,7 +9,7 @@ La PC de tickets se comunica únicamente con la API. No necesita acceso directo 
 - Windows con la impresora térmica instalada y funcionando.
 - Node.js 18 o superior.
 - Usuario de la API con acceso a la aplicación `etiquetas` y a la tienda correspondiente.
-- API de EscanersGlobal disponible y con las migraciones de tickets aplicadas (`068`, `069`, `070` y `071`).
+- API de EscanersGlobal disponible y con las migraciones de tickets aplicadas (`068`, `069`, `070`, `071` y `072`).
 - Conectividad permanente entre esta PC y `API_URL`.
 
 ## Qué hace el servicio
@@ -186,7 +186,7 @@ Verifica `STORE_USER_EMAIL`, `STORE_USER_PASSWORD`, `TIENDA` y que el usuario te
 
 ### No llegan tickets
 
-Verifica que `API_URL` sea correcta, que la API esté disponible y que las migraciones `068`, `069`, `070` y `071` estén aplicadas. El servicio también consulta `/tickets/pending` con su `TICKET_CLIENT_ID`, por lo que un pedido creado durante una desconexión debe recuperarse para esa PC.
+Verifica que `API_URL` sea correcta, que la API esté disponible y que las migraciones `068`, `069`, `070`, `071` y `072` estén aplicadas. El servicio también consulta `/tickets/pending` con su `TICKET_CLIENT_ID`, por lo que un pedido creado durante una desconexión debe recuperarse para esa PC.
 
 ### La impresora no responde
 

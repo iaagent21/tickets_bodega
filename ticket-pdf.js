@@ -3,6 +3,10 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
 
+const PAGE_WIDTH = 227; // 80 mm en puntos PDF.
+const PAGE_MARGINS = { top: 12, bottom: 12, left: 10, right: 10 };
+const MEASURE_PAGE_HEIGHT = 1_000_000;
+
 function generateBarcodeBuffer(text) {
   return new Promise((resolve, reject) => {
     bwipjs.toBuffer({
@@ -55,26 +59,19 @@ function asItems(value) {
   return Array.isArray(value) ? value : [];
 }
 
-async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
-  if (!rutaData || typeof rutaData !== 'object') {
-    throw new Error('La API devolvió una ruta de picking vacía o inválida.');
-  }
-
-  fs.mkdirSync(ticketsDir, { recursive: true });
-  const pdfPath = path.join(ticketsDir, `pedido_${safeFilenamePart(pedidoId)}.pdf`);
-  let barcodeBuffer = null;
-  try {
-    barcodeBuffer = await generateBarcodeBuffer(pedidoId);
-  } catch (error) {
-    console.error('No se pudo generar el código de barras:', error.message);
-  }
-
-  const doc = new PDFDocument({
-    size: [227, 800],
-    margins: { top: 12, bottom: 12, left: 10, right: 10 },
+function createPdfDocument(height) {
+  return new PDFDocument({
+    // El ancho es fijo a 80 mm; la altura se calcula en dos pasadas según el
+    // contenido real del pedido.
+    size: [PAGE_WIDTH, height],
+    margins: PAGE_MARGINS,
   });
-  const writeStream = fs.createWriteStream(pdfPath);
-  const pageBottom = 788;
+}
+
+function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuffer) {
+  // La altura final se calcula después de dibujar todo. No se crean páginas
+  // intermedias: el ticket térmico es una sola tira de 80 mm de ancho.
+  const pageBottom = Number.POSITIVE_INFINITY;
   let renderedItems = 0;
 
   const drawDivider = (color = '#94a3b8') => {
@@ -159,7 +156,6 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
     list.forEach(renderSimpleItem);
   };
 
-  doc.pipe(writeStream);
   const now = new Date();
   doc.font('Helvetica').fontSize(7.5).text(
     `Fecha: ${now.toLocaleDateString('es-MX')}   Hora: ${now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}`,
@@ -230,13 +226,54 @@ async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
   else drawDivider('#000000');
   if (barcodeBuffer) {
     const barcodeWidth = 105;
-    doc.image(barcodeBuffer, (227 - barcodeWidth) / 2, doc.y, { width: barcodeWidth });
+    const barcodeTop = doc.y;
+    doc.image(barcodeBuffer, (PAGE_WIDTH - barcodeWidth) / 2, barcodeTop, { width: barcodeWidth });
+    // image() con coordenadas explícitas no siempre actualiza doc.y.
+    doc.y = barcodeTop + 68;
   } else {
     doc.font('Helvetica').fontSize(8).text(`Código de barras no disponible. ID: ${pedidoId}`, { align: 'center' });
   }
 
+  return {
+    renderedItems,
+    expectedTotal,
+    height: Math.max(100, Math.ceil(doc.y + PAGE_MARGINS.bottom)),
+  };
+}
+
+async function createTicketPdf(pedidoId, clienteNombre, rutaData, ticketsDir) {
+  if (!rutaData || typeof rutaData !== 'object') {
+    throw new Error('La API devolvió una ruta de picking vacía o inválida.');
+  }
+
+  fs.mkdirSync(ticketsDir, { recursive: true });
+  const pdfPath = path.join(ticketsDir, `pedido_${safeFilenamePart(pedidoId)}.pdf`);
+  let barcodeBuffer = null;
+  try {
+    barcodeBuffer = await generateBarcodeBuffer(pedidoId);
+  } catch (error) {
+    console.error('No se pudo generar el código de barras:', error.message);
+  }
+
+  // Primera pasada: medimos el contenido. Segunda pasada: creamos el PDF con
+  // exactamente la altura necesaria para el rollo térmico.
+  const measureDoc = createPdfDocument(MEASURE_PAGE_HEIGHT);
+  const measured = renderTicketContent(measureDoc, pedidoId, clienteNombre, rutaData, barcodeBuffer);
+  measureDoc.end();
+
+  const doc = createPdfDocument(measured.height);
+  const writeStream = fs.createWriteStream(pdfPath);
+  doc.pipe(writeStream);
+  const rendered = renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuffer);
+
   return new Promise((resolve, reject) => {
-    writeStream.on('finish', () => resolve({ pdfPath, renderedItems, expectedTotal }));
+    writeStream.on('finish', () => resolve({
+      pdfPath,
+      renderedItems: rendered.renderedItems,
+      expectedTotal: rendered.expectedTotal,
+      pageWidth: PAGE_WIDTH,
+      pageHeight: measured.height,
+    }));
     writeStream.on('error', reject);
     doc.end();
   });

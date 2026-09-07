@@ -1,6 +1,6 @@
 # Tickets de bodega
 
-Servicio Node.js para recibir jobs de tickets desde EscanersGlobal, consultar la ruta completa de picking, generar un PDF de 80 mm e imprimirlo en Windows.
+Servicio Node.js para recibir jobs de tickets desde EscanersGlobal, consultar la ruta completa de picking, generar un PDF de 80 mm de ancho con altura dinámica e imprimirlo en Windows.
 
 La PC de tickets se comunica únicamente con la API. No necesita acceso directo a Supabase ni claves `service_role`.
 

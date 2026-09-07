@@ -171,6 +171,7 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`, 10, doc.y, { width: 207 });
   if (clienteNombre) doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`, 10, doc.y, { width: 207 });
   doc.moveDown(0.4);
+  drawDivider('#94a3b8');
 
   const rutas = asItems(rutaData.rutas);
   const sinRutaItems = [];
@@ -193,8 +194,8 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const sinRutaYSinUbicacion = [...sinRutaItems, ...asItems(rutaData.sin_ubicacion)];
   if (sinRutaYSinUbicacion.length > 0) {
     if (doc.y + 45 > pageBottom) doc.addPage();
-    else drawDivider('#94a3b8');
-    drawSectionTitle('Sin ubicacion', false, false);
+    else doc.moveDown(0.5);
+    drawSectionTitle('Sin ubicación');
     drawTableHeader();
     sinRutaYSinUbicacion.forEach(renderRouteItem);
   }
@@ -208,7 +209,7 @@ function renderTicketContent(doc, pedidoId, clienteNombre, rutaData, barcodeBuff
   const expectedPositive = Number(rutaData.resumen?.total_items_surtibles);
   const expectedTotal = Number.isFinite(expectedPositive) ? expectedPositive + changesCount : null;
   if (doc.y + 75 > pageBottom) doc.addPage();
-  else doc.moveDown(0.5);
+  else drawDivider('#94a3b8');
   if (barcodeBuffer) {
     const barcodeWidth = 105;
     const barcodeTop = doc.y;

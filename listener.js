@@ -1,453 +1,427 @@
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const net = require('net');
-const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws');
-const fetch = require('node-fetch');
-const PDFDocument = require('pdfkit');
-const bwipjs = require('bwip-js');
 const { print } = require('pdf-to-printer');
+const { createApiClient } = require('./api-client');
+const { createTicketPdf } = require('./ticket-pdf');
 
-// Cargar variables de entorno
 require('dotenv').config();
 
+function parseBoolean(value, name) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  throw new Error(`${name} debe ser true o false.`);
+}
+
+function parsePositiveInteger(value, name, fallback, max) {
+  const parsed = value === undefined || value === '' ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new Error(`${name} debe ser un entero entre 1 y ${max}.`);
+  }
+  return parsed;
+}
+
 const {
-  SUPABASE_URL,
-  SUPABASE_KEY,          // Acepta service_role key O anon key
   STORE_USER_EMAIL,
   STORE_USER_PASSWORD,
   API_URL,
-  DRY_RUN,
-  // Configuración de tienda — cambiar estos valores para adaptar a otra tienda
-  PEDIDOS_TABLE,         // Nombre de la tabla en Supabase, ej: pedidos_la4ta
-  TIENDA,                // Identificador de tienda para la API, ej: la4ta
-  // Configuración de Impresora
-  AUTO_PRINT,            // true o false
-  PRINTER_NAME,          // Nombre exacto de la impresora en Windows, vacío para predeterminada
+  TIENDA,
+  PRINTER_NAME = '',
+  TICKET_CLIENT_ID,
 } = process.env;
 
-// Validar variables requeridas
+const DRY_RUN = parseBoolean(process.env.DRY_RUN ?? 'false', 'DRY_RUN');
+const AUTO_PRINT = parseBoolean(process.env.AUTO_PRINT ?? 'true', 'AUTO_PRINT');
+const API_TIMEOUT_MS = parsePositiveInteger(process.env.API_TIMEOUT_MS, 'API_TIMEOUT_MS', 15_000, 120_000);
+const LEASE_SECONDS = parsePositiveInteger(process.env.LEASE_SECONDS, 'LEASE_SECONDS', 120, 900);
+const PENDING_POLL_MS = parsePositiveInteger(process.env.PENDING_POLL_MS, 'PENDING_POLL_MS', 30_000, 15 * 60_000);
+
 const missingVars = [
-  !SUPABASE_URL && 'SUPABASE_URL',
-  !SUPABASE_KEY && 'SUPABASE_KEY',
   !STORE_USER_EMAIL && 'STORE_USER_EMAIL',
   !STORE_USER_PASSWORD && 'STORE_USER_PASSWORD',
   !API_URL && 'API_URL',
-  !PEDIDOS_TABLE && 'PEDIDOS_TABLE',
   !TIENDA && 'TIENDA',
-  typeof DRY_RUN === 'undefined' && 'DRY_RUN',
-  typeof AUTO_PRINT === 'undefined' && 'AUTO_PRINT',
-  typeof PRINTER_NAME === 'undefined' && 'PRINTER_NAME',
 ].filter(Boolean);
 
 if (missingVars.length > 0) {
-  console.error(`ERROR: Faltan variables de entorno requeridas en el archivo .env: ${missingVars.join(', ')}`);
+  console.error(`ERROR: Faltan variables en .env: ${missingVars.join(', ')}`);
   process.exit(1);
 }
 
-// Asegurar que exista la carpeta para guardar los PDFs
+const storeId = String(TIENDA).trim().toLowerCase();
 const ticketsDir = path.join(__dirname, 'tickets');
-if (!fs.existsSync(ticketsDir)) {
-  fs.mkdirSync(ticketsDir, { recursive: true });
-}
+const statePath = path.join(ticketsDir, '.ticket-state.json');
+const clientIdPath = path.join(ticketsDir, '.ticket-client-id');
+fs.mkdirSync(ticketsDir, { recursive: true });
 
-// Inicializar cliente de Supabase
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: false },
-  realtime: { websocket: ws }
-});
+function resolveClientId() {
+  const configured = String(TICKET_CLIENT_ID ?? '').trim();
+  if (configured) return configured;
 
-console.log('==================================================');
-console.log('   Iniciando Script de Impresión de Tickets');
-console.log(`   Tienda: ${TIENDA}`);
-console.log(`   Tabla Supabase: ${PEDIDOS_TABLE}`);
-console.log(`   Servidor API: ${API_URL}`);
-console.log(`   Modo Simulación: ${DRY_RUN === 'true' ? 'ACTIVADO' : 'DESACTIVADO'}`);
-console.log(`   Impresión Automática: ${AUTO_PRINT === 'true' ? 'ACTIVADA' : 'DESACTIVADA'}`);
-if (AUTO_PRINT === 'true') {
-  console.log(`   Impresora Destino: ${PRINTER_NAME || 'Predeterminada del sistema'}`);
-}
-console.log('==================================================');
-
-// Función para iniciar sesión y obtener token JWT de Supabase
-async function getApiAuthToken() {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: STORE_USER_EMAIL,
-    password: STORE_USER_PASSWORD
-  });
-  if (error) {
-    throw new Error(`Error de autenticación: ${error.message}`);
+  try {
+    const existing = fs.readFileSync(clientIdPath, 'utf8').trim();
+    if (/^[A-Za-z0-9._:-]{1,128}$/.test(existing)) return existing;
+  } catch {
+    // Se crea debajo.
   }
-  return data.session.access_token;
+
+  const generated = crypto.randomUUID();
+  fs.writeFileSync(clientIdPath, `${generated}\n`, 'utf8');
+  return generated;
 }
 
-// Función para obtener la ruta del pedido desde la API
-async function fetchPickingRoute(pedido, token) {
-  const url = `${API_URL}/picking/ruta/${encodeURIComponent(pedido)}`;
-  const response = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'x-app-id': 'etiquetas',
-      'x-tienda': TIENDA
+const clientId = resolveClientId();
+
+function loadState() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    if (parsed && typeof parsed === 'object' && parsed.jobs && typeof parsed.jobs === 'object') {
+      return { version: 2, jobs: parsed.jobs };
     }
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => null);
-    throw new Error(errorBody?.message ?? `La API retornó código ${response.status}`);
+  } catch {
+    // Primera ejecución o archivo incompleto después de un apagado brusco.
   }
-
-  return response.json();
+  return { version: 2, jobs: {} };
 }
 
-// Función para generar la imagen del código de barras en formato PNG Buffer
-function generateBarcodeBuffer(text) {
-  return new Promise((resolve, reject) => {
-    bwipjs.toBuffer({
-      bcid: 'code128',       // Tipo de código de barras
-      text: text,            // Texto a codificar
-      scale: 3,              // Factor de escala
-      height: 10,            // Altura de barras en mm
-      includetext: true,     // Incluir texto abajo
-      textalign: 'center',   // Centrar texto
-      textcolor: '000000',   // Color del texto
-    }, (err, png) => {
-      if (err) reject(err);
-      else resolve(png);
-    });
-  });
+const state = loadState();
+
+function saveState() {
+  const tempPath = `${statePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(tempPath, statePath);
 }
 
-// Función para armar el PDF de 80mm
-function getPasilloTicketText(item) {
-  const numero = item?.pasillo_numero ? String(item.pasillo_numero).trim() : '';
-  const nombre = String(item?.pasillo_nombre ?? '').trim();
-  const inicial = nombre && !nombre.toLowerCase().startsWith('pasillo') ? nombre.charAt(0).toUpperCase() : '';
-  return inicial && numero ? `${inicial}${numero}` : (numero || inicial);
+function updateJobState(job, status, extra = {}) {
+  state.jobs[job.id] = {
+    jobId: job.id,
+    pedido: job.pedido,
+    status,
+    updatedAt: new Date().toISOString(),
+    ...extra,
+  };
+  saveState();
 }
 
-async function createTicketPdf(pedidoId, clienteNombre, rutaData) {
-  return new Promise(async (resolve, reject) => {
+function summarizeRoute(rutaData) {
+  const rutas = Array.isArray(rutaData?.rutas) ? rutaData.rutas : [];
+  const routeItems = rutas.reduce(
+    (total, piso) => total + (Array.isArray(piso?.items) ? piso.items.length : 0),
+    0,
+  );
+  const noRouteItems = rutas.reduce(
+    (total, piso) => total + (Array.isArray(piso?.sin_ruta) ? piso.sin_ruta.length : 0),
+    0,
+  );
+  const sinUbicacion = Array.isArray(rutaData?.sin_ubicacion) ? rutaData.sin_ubicacion.length : 0;
+  const sinLayout = Array.isArray(rutaData?.sin_layout) ? rutaData.sin_layout.length : 0;
+  const cambios = Array.isArray(rutaData?.cambios) ? rutaData.cambios.length : 0;
+  const rendered = routeItems + noRouteItems + sinUbicacion + sinLayout + cambios;
+  const reportedPositive = Number(rutaData?.resumen?.total_items_surtibles);
+  const expected = Number.isFinite(reportedPositive) ? reportedPositive + cambios : null;
+  return { routeItems, noRouteItems, sinUbicacion, sinLayout, cambios, rendered, expected };
+}
+
+async function printWithRetry(pdfPath) {
+  const options = PRINTER_NAME ? { printer: PRINTER_NAME } : {};
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const pdfPath = path.join(ticketsDir, `pedido_${pedidoId}.pdf`);
-      
-      // 80mm de ancho son aprox. 227 puntos PostScript.
-      // Alto auto-paginado, con márgenes de 10 puntos a los lados.
-      const doc = new PDFDocument({
-        size: [227, 800], // Tamaño base (el alto se puede reajustar si es necesario, o fluye a la sig. página)
-        margins: { top: 12, bottom: 12, left: 10, right: 10 }
-      });
-
-      const writeStream = fs.createWriteStream(pdfPath);
-      doc.pipe(writeStream);
-
-      // --- Encabezado ---
-      const now = new Date();
-      const dateStr = now.toLocaleDateString('es-MX');
-      const timeStr = now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
-      
-      doc.font('Helvetica').fontSize(7.5).text(`Fecha: ${dateStr}   Hora: ${timeStr}`, { align: 'center' });
-      doc.moveDown(0.4);
-      
-      // Línea divisoria
-      doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke();
-      doc.moveDown(0.4);
-
-      // Datos del Pedido
-      doc.font('Helvetica-Bold').fontSize(8.5).text(`Pedido: #${pedidoId}`);
-      if (clienteNombre) {
-        doc.font('Helvetica').fontSize(8).text(`Cliente: ${clienteNombre}`);
-      }
-      doc.moveDown(0.4);
-      
-      // Línea divisoria
-      doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke();
-      doc.moveDown(0.4);
-
-      // Helper to draw table header
-      const drawTableHeader = () => {
-        const startY = doc.y;
-        doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Pasillo', 10, startY, { width: 32 });
-        doc.text('Cajón', 45, startY, { width: 42 });
-        doc.text('SKU', 90, startY, { width: 62 });
-        doc.text('Cant', 152, startY, { width: 35, align: 'right' });
-        
-        doc.y = startY + 10;
-        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#475569');
-        doc.moveDown(0.3);
-      };
-
-      // --- Productos Ordenados (Ruta Lógica) ---
-      const rutas = rutaData.rutas || [];
-      if (rutas.length === 0) {
-        doc.font('Helvetica-Oblique').fontSize(8).text('No hay productos en la ruta lógica.');
-        doc.moveDown(0.5);
-      } else {
-        rutas.forEach((piso, index) => {
-          const items = [...(piso.items || []), ...(piso.sin_ruta || [])];
-          
-          // Calcular la altura requerida para el encabezado del piso y el primer elemento
-          const firstItem = items[0];
-          const firstItemHeight = firstItem ? (18 + doc.heightOfString(firstItem.producto || 'Sin descripción', { width: 202 })) : 0;
-          const requiredFloorHeaderHeight = (index > 0 ? 21 : 15) + 12 + firstItemHeight;
-
-          if (doc.y + requiredFloorHeaderHeight > 788) {
-            doc.addPage();
-          } else if (index > 0) {
-            // Si es el segundo piso en adelante y cupo, dibujamos una línea divisoria antes
-            doc.moveDown(0.4);
-            doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
-            doc.moveDown(0.4);
-          }
-
-          // Nombre del Piso (e.g. Bodega 1)
-          doc.font('Helvetica-Bold').fontSize(9).text(`${piso.piso_nombre || 'Bodega'}:`, { underline: true });
-          doc.moveDown(0.3);
-
-          drawTableHeader();
-
-          items.forEach((item) => {
-            let pasilloText = getPasilloTicketText(item);
-            let cajonText = item.tipo_ubicacion === 'cuarto' ? (item.cuarto_nombre || 'Cuarto') : (item.ubicacion_visible || item.cajon || 'Cajón');
-
-            // Abreviar Tapanco para ahorrar espacio y evitar truncamiento
-            if (cajonText.startsWith('Tapanco ')) {
-              cajonText = cajonText.replace('Tapanco ', 'Tpc ');
-            }
-
-            // Truncar cajonText si es muy largo para evitar encimar texto
-            if (cajonText.length > 8) {
-              cajonText = cajonText.substring(0, 7) + '.';
-            }
-
-            // Verificar si el elemento cabe en el espacio restante de la página
-            const neededHeight = 18 + doc.heightOfString(item.producto || 'Sin descripción', { width: 202 });
-            if (doc.y + neededHeight > 788) {
-              doc.addPage();
-              drawTableHeader();
-            }
-
-            const startY = doc.y;
-            doc.font('Helvetica-Bold').fontSize(8);
-            doc.text(pasilloText, 10, startY, { width: 32, lineBreak: false });
-            doc.text(cajonText, 45, startY, { width: 42, lineBreak: false });
-            doc.text(item.sku || '', 90, startY, { width: 62, lineBreak: false });
-            doc.text(String(item.cantidad_solicitada || 0), 152, startY, { width: 35, align: 'right', lineBreak: false });
-
-            doc.y = startY + 13;
-            doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
-            doc.moveDown(0.3);
-            
-            doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
-            doc.moveDown(0.3);
-          });
-          doc.moveDown(0.2);
-        });
-      }
-
-      // --- Productos Sin Ubicación ---
-      const itemsSinUbicacion = rutaData.sin_ubicacion || [];
-      if (itemsSinUbicacion.length > 0) {
-        const firstItem = itemsSinUbicacion[0];
-        const firstItemHeight = 18 + doc.heightOfString(firstItem.producto || 'Sin descripción', { width: 202 });
-        
-        // El divisor y el encabezado de sección toman aproximadamente 21pt
-        if (doc.y + 21 + firstItemHeight > 788) {
-          doc.addPage();
-        } else {
-          doc.moveDown(0.4);
-          doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
-          doc.moveDown(0.4);
-        }
-
-        doc.font('Helvetica-Bold').fontSize(9).text('SIN UBICACIÓN REGISTRADA:', { underline: true });
-        doc.moveDown(0.3);
-
-        itemsSinUbicacion.forEach((item) => {
-          const neededHeight = 18 + doc.heightOfString(item.producto || 'Sin descripción', { width: 202 });
-          if (doc.y + neededHeight > 788) {
-            doc.addPage();
-            doc.font('Helvetica-Bold').fontSize(9).text('SIN UBICACIÓN REGISTRADA (Cont.):', { underline: true });
-            doc.moveDown(0.3);
-          }
-
-          const startY = doc.y;
-          doc.font('Helvetica-Bold').fontSize(8);
-          doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 100, lineBreak: false });
-          doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 120, startY, { width: 50, lineBreak: false });
-
-          doc.y = startY + 13;
-          doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
-          doc.moveDown(0.3);
-          
-          doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
-          doc.moveDown(0.3);
-        });
-      }
-
-      // --- Cambios (Cantidades Negativas) ---
-      const itemsCambios = rutaData.cambios || [];
-      if (itemsCambios.length > 0) {
-        const firstItem = itemsCambios[0];
-        const firstItemHeight = 18 + doc.heightOfString(firstItem.producto || 'Sin descripción', { width: 202 });
-        
-        // El divisor y el encabezado de sección toman aproximadamente 21pt
-        if (doc.y + 21 + firstItemHeight > 788) {
-          doc.addPage();
-        } else {
-          doc.moveDown(0.4);
-          doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#94a3b8');
-          doc.moveDown(0.4);
-        }
-
-        doc.font('Helvetica-Bold').fontSize(9).text('CAMBIOS:', { underline: true });
-        doc.moveDown(0.3);
-
-        itemsCambios.forEach((item) => {
-          const neededHeight = 18 + doc.heightOfString(item.producto || 'Sin descripción', { width: 202 });
-          if (doc.y + neededHeight > 788) {
-            doc.addPage();
-            doc.font('Helvetica-Bold').fontSize(9).text('CAMBIOS (Cont.):', { underline: true });
-            doc.moveDown(0.3);
-          }
-
-          const startY = doc.y;
-          doc.font('Helvetica-Bold').fontSize(8);
-          doc.text(`SKU: ${item.sku || ''}`, 10, startY, { width: 100, lineBreak: false });
-          doc.text(`Cant: ${item.cantidad_solicitada || 0}`, 120, startY, { width: 50, lineBreak: false });
-
-          doc.y = startY + 13;
-          doc.font('Helvetica').fontSize(7.5).text(item.producto || 'Sin descripción', 15, doc.y, { width: 202 });
-          doc.moveDown(0.3);
-          
-          doc.lineWidth(0.25).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#cbd5e1');
-          doc.moveDown(0.3);
-        });
-      }
-
-      // Verificar si cabe el código de barras (aproximadamente 70pt)
-      if (doc.y + 70 > 788) {
-        doc.addPage();
-      } else {
-        doc.moveDown(0.6);
-        doc.lineWidth(0.5).moveTo(10, doc.y).lineTo(217, doc.y).stroke('#000000');
-        doc.moveDown(0.6);
-      }
-
-      // --- Código de Barras al Pie ---
-      try {
-        const barcodeBuffer = await generateBarcodeBuffer(pedidoId);
-        // Hacer un ~30% más chico: 150 * 0.7 = 105 de ancho
-        const barcodeWidth = 105;
-        const xPos = (227 - barcodeWidth) / 2;
-        doc.image(barcodeBuffer, xPos, doc.y, { width: barcodeWidth });
-      } catch (barcodeErr) {
-        console.error('Error al generar código de barras para PDF:', barcodeErr);
-        doc.font('Helvetica').fontSize(8).text(`Error de Código de Barras. ID: ${pedidoId}`, { align: 'center' });
-      }
-
-      // Finalizar PDF
-      doc.end();
-
-      writeStream.on('finish', () => resolve(pdfPath));
-      writeStream.on('error', (err) => reject(err));
-    } catch (err) {
-      reject(err);
+      await print(pdfPath, options);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
     }
-  });
+  }
+  throw lastError;
 }
 
-// Función principal de procesamiento de pedido
-async function procesarPedido(row) {
-  const pedidoId = String(row.pedido || '').trim();
-  console.log(`[${new Date().toLocaleTimeString()}] Procesando nuevo pedido recibido: #${pedidoId}...`);
+function isClaimConflict(error) {
+  return error?.status === 409;
+}
 
-  if (!pedidoId) {
-    console.warn('Advertencia: El pedido recibido no contiene un identificador de pedido válido.');
+function isJobGone(error) {
+  return error?.status === 404;
+}
+
+async function reportFailed(apiClient, job, errorMessage) {
+  try {
+    const result = await apiClient.markTicketJobFailed(job.id, clientId, errorMessage);
+    console.warn(`Job ${job.id} quedó como ${result?.reason || 'failed'}.`);
+  } catch (error) {
+    console.error(`No se pudo reportar failed para #${job.pedido}:`, error.message);
+    console.error('El lease expirará y el job podrá recuperarse automáticamente.');
+  }
+}
+
+async function processJob(job, apiClient, previewedJobs) {
+  const pedidoId = String(job?.pedido ?? '').trim();
+  if (!job?.id || !pedidoId) {
+    console.warn('Se ignoró un evento de ticket sin id o pedido.');
     return;
   }
 
-  try {
-    // 1. Iniciar sesión en la API y obtener token JWT
-    console.log('Autenticando contra Supabase...');
-    const token = await getApiAuthToken();
+  if (previewedJobs.has(job.id)) return;
+  console.log(`[${new Date().toLocaleTimeString()}] Procesando ticket #${pedidoId} (job ${job.id})...`);
 
-    // 2. Consultar la API para obtener el cálculo de ruta ordenada
-    console.log(`Consultando ruta optimizada para pedido #${pedidoId} en API...`);
-    const rutaData = await fetchPickingRoute(pedidoId, token);
-    
-    // Obtener el nombre del cliente de los datos de productos
-    let clienteNombre = '';
+  // La vista previa no reclama ni confirma el job: queda pendiente para producción.
+  if (DRY_RUN || !AUTO_PRINT) {
     try {
-      const productosJson = typeof row.productos === 'string' ? JSON.parse(row.productos) : row.productos;
-      clienteNombre = productosJson?.nombre || '';
-    } catch (e) {
-      // Ignorar errores de parseo de JSON
+      const rutaData = await apiClient.fetchPickingRoute(pedidoId);
+      const summary = summarizeRoute(rutaData);
+      console.log(
+        `Vista previa #${pedidoId}: ${summary.rendered} líneas recibidas ` +
+        `(ruta ${summary.routeItems}, sin ruta ${summary.noRouteItems}, ` +
+        `sin ubicación ${summary.sinUbicacion}, sin layout ${summary.sinLayout}, cambios ${summary.cambios}).`,
+      );
+      if (!DRY_RUN) {
+        const result = await createTicketPdf(
+          pedidoId,
+          String(rutaData?.nombre ?? '').trim(),
+          rutaData,
+          ticketsDir,
+        );
+        updateJobState(job, 'previewed', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
+        console.log(`PDF de vista previa generado: ${result.pdfPath}`);
+      } else {
+        updateJobState(job, 'dry_run', { renderedItems: summary.rendered });
+      }
+      previewedJobs.add(job.id);
+    } catch (error) {
+      updateJobState(job, 'preview_failed', { error: error.message });
+      console.error(`Error en vista previa de #${pedidoId}:`, error.message);
+    }
+    return;
+  }
+
+  let claimed = false;
+  let physicalPrintSucceeded = false;
+  try {
+    let claim;
+    try {
+      claim = await apiClient.claimTicketJob(job.id, clientId, LEASE_SECONDS);
+    } catch (error) {
+      if (isClaimConflict(error)) {
+        updateJobState(job, 'busy');
+        console.log(`Job ${job.id} está siendo procesado por otra PC; se deja para su lease.`);
+        return;
+      }
+      if (isJobGone(error)) {
+        updateJobState(job, 'not_found');
+        console.log(`Job ${job.id} ya no existe; se omite.`);
+        return;
+      }
+      throw error;
     }
 
-    if (DRY_RUN === 'true') {
-      const totalRuta = (rutaData.rutas || []).reduce((acc, piso) => acc + (piso.items || []).length + (piso.sin_ruta || []).length, 0);
-      const totalSinRuta = (rutaData.sin_ubicacion || []).length;
-      console.log('--- MODO SIMULACIÓN ---');
-      console.log(`Pedido ID: ${pedidoId}`);
-      console.log(`Cliente: ${clienteNombre}`);
-      console.log(`Items en Ruta: ${totalRuta}`);
-      console.log(`Items Sin Ruta: ${totalSinRuta}`);
-      console.log('-----------------------');
+    if (claim?.reason === 'busy') {
+      updateJobState(job, 'busy');
+      console.log(`Job ${job.id} está ocupado por otra PC.`);
       return;
     }
+    if (claim?.reason === 'printed') {
+      updateJobState(job, 'printed');
+      console.log(`Job ${job.id} ya estaba impreso; se omite duplicado.`);
+      return;
+    }
+    if (claim?.reason === 'not_found') {
+      updateJobState(job, 'not_found');
+      return;
+    }
+    if (!['claimed', 'already_claimed'].includes(claim?.reason)) {
+      throw new Error(`La API no permitió reclamar el job ${job.id}: ${claim?.reason || 'respuesta inválida'}.`);
+    }
+    claimed = true;
+    updateJobState(job, 'claimed', { attempts: claim?.job?.attempts ?? null });
 
-    // 3. Generar el archivo PDF
-    console.log('Generando archivo PDF del ticket...');
-    const pdfPath = await createTicketPdf(pedidoId, clienteNombre, rutaData);
-    console.log(`✅ ¡Éxito! Ticket PDF generado exitosamente en: ${pdfPath}`);
+    const rutaData = await apiClient.fetchPickingRoute(pedidoId);
+    const summary = summarizeRoute(rutaData);
+    console.log(
+      `Pedido #${pedidoId}: ${summary.rendered} líneas recibidas ` +
+      `(ruta ${summary.routeItems}, sin ruta ${summary.noRouteItems}, ` +
+      `sin ubicación ${summary.sinUbicacion}, sin layout ${summary.sinLayout}, cambios ${summary.cambios}).`,
+    );
 
-    // 4. Impresión Automática si está configurada
-    if (AUTO_PRINT === 'true') {
-      console.log('Enviando ticket a la impresora...');
-      const options = PRINTER_NAME ? { printer: PRINTER_NAME } : {};
-      await print(pdfPath, options);
-      console.log(`🖨️  ¡Éxito! Ticket enviado a la impresora: ${PRINTER_NAME || 'Predeterminada'}`);
+    if (summary.expected !== null && summary.rendered !== summary.expected) {
+      console.warn(
+        `ADVERTENCIA: la API reporta ${summary.expected} líneas totales, ` +
+        `pero devolvió ${summary.rendered}. Se imprimirán todas las líneas recibidas.`,
+      );
     }
 
-    console.log('--------------------------------------------------');
+    const result = await createTicketPdf(
+      pedidoId,
+      String(rutaData?.nombre ?? '').trim(),
+      rutaData,
+      ticketsDir,
+    );
+    updateJobState(job, 'generated', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
+    console.log(`PDF generado: ${result.pdfPath}`);
 
+    await printWithRetry(result.pdfPath);
+    physicalPrintSucceeded = true;
+    updateJobState(job, 'printed_unconfirmed', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
+    console.log(`Ticket #${pedidoId} enviado a ${PRINTER_NAME || 'la impresora predeterminada'}.`);
+
+    try {
+      const printed = await apiClient.markTicketJobPrinted(job.id, clientId);
+      updateJobState(job, 'printed', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
+      console.log(`Job ${job.id} confirmado como ${printed?.reason || 'printed'}.`);
+    } catch (error) {
+      updateJobState(job, 'printed_unconfirmed', {
+        pdfPath: result.pdfPath,
+        renderedItems: result.renderedItems,
+        error: error.message,
+      });
+      console.error(`La impresión fue exitosa, pero no se confirmó el job ${job.id}:`, error.message);
+      console.error('Se puede repetir el ticket después de que expire el lease; es la limitación inevitable del corte entre imprimir y confirmar.');
+    }
   } catch (error) {
-    console.error(`❌ Error al procesar el pedido #${pedidoId}:`, error.message);
-    console.log('--------------------------------------------------');
+    updateJobState(job, 'failed', { error: error.message });
+    console.error(`Error al procesar #${pedidoId}:`, error.message);
+    if (claimed && !physicalPrintSucceeded) await reportFailed(apiClient, job, error.message);
   }
 }
 
-// Suscribirse a la base de datos en tiempo real
-console.log(`Conectando a Supabase Realtime → tabla: ${PEDIDOS_TABLE}...`);
-const channelName = `realtime:${PEDIDOS_TABLE}`;
-const channel = supabase
-  .channel(channelName)
-  .on(
-    'postgres_changes',
-    {
-      event: 'INSERT',
-      schema: 'public',
-      table: PEDIDOS_TABLE
-    },
-    (payload) => {
-      // Un nuevo pedido fue insertado
-      void procesarPedido(payload.new);
-    }
-  )
-  .subscribe((status) => {
-    if (status === 'SUBSCRIBED') {
-      console.log(`✅ ¡Suscrito con éxito a Supabase Realtime → ${PEDIDOS_TABLE}!`);
-      console.log('Esperando nuevos pedidos...');
-    } else {
-      console.log(`Estado de suscripción: ${status}`);
-    }
-  });
+function createOrderQueue(apiClient) {
+  const pending = [];
+  const queued = new Set();
+  const previewedJobs = new Set();
+  let running = false;
 
-// Mantener el proceso vivo y manejar salida limpia
-process.on('SIGINT', () => {
-  console.log('\nCerrando conexión y saliendo...');
-  void supabase.channel(channelName).unsubscribe();
+  function enqueue(job, source) {
+    const jobId = String(job?.id ?? '').trim();
+    const pedidoId = String(job?.pedido ?? '').trim();
+    const jobStore = String(job?.tienda ?? storeId).trim().toLowerCase();
+    if (!jobId || !pedidoId || jobStore !== storeId) return;
+    if (queued.has(jobId)) return;
+    queued.add(jobId);
+    pending.push({ job, source });
+    console.log(`Ticket #${pedidoId} agregado a la cola (${source}). Pendientes: ${pending.length}`);
+    void drain();
+  }
+
+  async function drain() {
+    if (running) return;
+    running = true;
+    try {
+      while (pending.length > 0) {
+        const item = pending.shift();
+        queued.delete(item.job.id);
+        await processJob(item.job, apiClient, previewedJobs);
+      }
+    } finally {
+      running = false;
+    }
+  }
+
+  return { enqueue };
+}
+
+let stopListener = async () => {
   process.exit(0);
+};
+
+async function main() {
+  const apiClient = createApiClient({
+    apiUrl: API_URL,
+    tienda: storeId,
+    email: STORE_USER_EMAIL,
+    password: STORE_USER_PASSWORD,
+    timeoutMs: API_TIMEOUT_MS,
+  });
+  const queue = createOrderQueue(apiClient);
+  let lastEventId = null;
+  let stopping = false;
+  let pendingTimer = null;
+  let streamAbort = null;
+
+  await apiClient.login();
+
+  async function recoverPending(source) {
+    let after = null;
+    let pages = 0;
+    while (!stopping) {
+      pages += 1;
+      if (pages > 10_000) throw new Error('La recuperación de tickets excedió el límite de páginas.');
+      const page = await apiClient.listPendingTicketJobs({ after, limit: 100 });
+      page.items.forEach((job) => queue.enqueue(job, source));
+      if (!page.nextCursor) return;
+      if (page.nextCursor === after) throw new Error('El cursor de tickets no avanzó.');
+      after = page.nextCursor;
+    }
+  }
+
+  async function runStream() {
+    let retryMs = 3_000;
+    while (!stopping) {
+      streamAbort = new AbortController();
+      try {
+        lastEventId = await apiClient.consumeTicketStream({
+          lastEventId,
+          signal: streamAbort.signal,
+          onJob: async (job) => queue.enqueue(job, 'SSE'),
+        });
+        retryMs = 3_000;
+        if (!stopping) await recoverPending('recuperación del stream');
+      } catch (error) {
+        if (stopping) break;
+        console.error(`Stream de tickets desconectado: ${error.message}`);
+        try {
+          await recoverPending('recuperación por desconexión');
+        } catch (recoveryError) {
+          console.error(`No se pudieron recuperar pendientes: ${recoveryError.message}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryMs));
+        retryMs = Math.min(retryMs * 2, 30_000);
+      } finally {
+        streamAbort = null;
+      }
+    }
+  }
+
+  stopListener = async () => {
+    if (stopping) return;
+    stopping = true;
+    if (pendingTimer) clearInterval(pendingTimer);
+    if (streamAbort) streamAbort.abort();
+    console.log('\nListener cerrado.');
+    process.exit(0);
+  };
+
+  console.log('==================================================');
+  console.log('   Listener de tickets iniciado');
+  console.log(`   Tienda: ${storeId}`);
+  console.log(`   API: ${String(API_URL).replace(/\/+$/, '')}`);
+  console.log(`   Cliente: ${clientId}`);
+  console.log(`   Modo simulación: ${DRY_RUN ? 'ACTIVADO' : 'DESACTIVADO'}`);
+  console.log(`   Impresión automática: ${AUTO_PRINT ? 'ACTIVADA' : 'DESACTIVADA'}`);
+  console.log('   Fuente: /tickets/stream + /tickets/pending');
+  console.log('==================================================');
+
+  if (!AUTO_PRINT && !DRY_RUN) {
+    console.warn('AUTO_PRINT=false: se generarán PDFs sin reclamar ni confirmar jobs.');
+  }
+
+  // El stream del API se registra antes de recuperar pendientes y además hace su
+  // propia recuperación inicial. La deduplicación por job_id cubre ambas vías.
+  void runStream();
+  await recoverPending('arranque');
+  pendingTimer = setInterval(() => {
+    void recoverPending('sondeo de pendientes').catch((error) => {
+      if (!stopping) console.error(`Error en sondeo de pendientes: ${error.message}`);
+    });
+  }, PENDING_POLL_MS);
+}
+
+process.on('SIGINT', () => {
+  console.log('\nCerrando listener...');
+  void stopListener();
+});
+
+main().catch((error) => {
+  console.error('No se pudo iniciar el listener:', error.message);
+  process.exitCode = 1;
 });

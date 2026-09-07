@@ -1,7 +1,7 @@
 {
-  "name": "tickets-la4ta",
+  "name": "tickets-bodega",
   "version": "1.0.0",
-  "description": "Script en tiempo real para generar tickets de picking en PDF para la tienda la4ta",
+  "description": "Listener multi-tienda para generar e imprimir tickets de picking desde EscanersGlobal",
   "main": "listener.js",
   "type": "commonjs",
   "scripts": {
@@ -9,12 +9,10 @@
     "test-print": "node test-print.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.1",
     "bwip-js": "^4.8.0",
     "dotenv": "^16.4.7",
     "node-fetch": "^2.7.0",
     "pdf-to-printer": "^5.8.0",
-    "pdfkit": "^0.16.0",
-    "ws": "^8.18.1"
+    "pdfkit": "^0.16.0"
   }
 }

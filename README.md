@@ -1,14 +1,14 @@
 # Tickets de bodega
 
-Servicio Node.js para recibir jobs de tickets desde EscanersGlobal, consultar la ruta completa de picking, generar páginas PDF de 80 mm x 800 puntos e imprimirlas en Windows.
+Servicio Node.js para recibir jobs de tickets desde EscanersGlobal, consultar el pedido mediante la API, generar un ticket compacto de 80 mm con el código de barras, pedido y cliente, e imprimirlo en Windows.
 
-La PC de tickets se comunica únicamente con la API. No necesita acceso directo a Supabase ni claves `service_role`.
+La PC se comunica exclusivamente con la API. No necesita `SUPABASE_URL`, `SUPABASE_KEY`, `PEDIDOS_TABLE`, acceso directo a Supabase ni ninguna clave `service_role`.
 
 ## Requisitos
 
 - Windows con la impresora térmica instalada y funcionando.
 - Node.js 18 o superior.
-- Usuario de la API con acceso a la aplicación `etiquetas` y a la tienda correspondiente.
+- Usuario de la API activo, con acceso a la aplicación `etiquetas`, permiso de consulta y acceso a la tienda correspondiente.
 - API de EscanersGlobal disponible y con las migraciones de tickets aplicadas (`068`, `069`, `070`, `071` y `072`).
 - Conectividad permanente entre esta PC y `API_URL`.
 
@@ -18,28 +18,16 @@ La PC de tickets se comunica únicamente con la API. No necesita acceso directo 
 2. Escucha `GET /tickets/stream` mediante SSE.
 3. Recupera periódicamente `GET /tickets/pending` para su `TICKET_CLIENT_ID`, incluyendo jobs fallidos y leases vencidos.
 4. Reclama cada job con `POST /tickets/jobs/:id/claim` antes de procesarlo.
-5. Consulta `GET /picking/ruta/{pedido}`.
-6. Genera el PDF con todos los productos recibidos, mostrando la vendedora arriba del pedido y el total antes del código de barras cuando están informados.
+5. Consulta `GET /picking/ruta/:pedido` en la API y extrae el nombre del cliente de `nombre`.
+6. Genera un PDF horizontal con el código de barras Code128 y el texto `Pedido: #... - Cliente: ...`.
 7. Imprime el ticket y confirma con `POST /tickets/jobs/:id/printed`.
 8. Si ocurre un error antes de imprimir, reporta `POST /tickets/jobs/:id/failed`.
 
 La deduplicación se realiza por `(job_id, TICKET_CLIENT_ID)`. Cada PC de la misma tienda recibe su propia entrega, por lo que puede imprimir el mismo ticket que otras PCs sin bloquearlas. Si una PC se desconecta, el API conserva su entrega y el servicio la recupera al reconectar o durante el sondeo de pendientes.
 
-## Ningún producto se omite
+## Contenido del ticket
 
-El PDF imprime todas las categorías de la respuesta de la API:
-
-- `rutas[].items`;
-- `rutas[].sin_ruta`;
-- `sin_ubicacion`;
-- `sin_layout`;
-- `cambios`.
-
-No se filtra ningún producto por piso, ubicación, layout o modo de picking. Si la cantidad recibida no coincide con el resumen de la API, el servicio deja una advertencia y conserva todas las líneas recibidas.
-
-## Datos comerciales
-
-La API devuelve `vendedora` y `total_documento` dentro de la respuesta de `/picking/ruta/{pedido}`. El PDF imprime `Vendedora: ...` arriba de `Pedido: ...` y `Total: $...` entre separadores antes del código de barras. Si alguno de los campos es `null`, se omite sólo ese dato y el resto del ticket continúa siendo válido.
+El PDF mide 80 mm de ancho por 1.5 pulgadas de alto y contiene el código de barras Code128 generado con el número de pedido y una línea con el pedido y el cliente. El nombre se obtiene de la respuesta de la API. No se consulta Supabase desde esta PC. Si el nombre no existe, imprime `Cliente no informado`.
 
 ## Instalación en Windows
 
@@ -75,10 +63,10 @@ API_URL=https://api.ejemplo.com
 # Identificador exacto de la tienda.
 TIENDA=surti
 
-# Producción: false. Consulta y valida sin reclamar ni imprimir.
+# Producción: false. Simula la recepción sin reclamar ni imprimir.
 DRY_RUN=false
 
-# Producción: true. Reclama jobs e imprime tickets.
+# Producción: true. Reclama jobs e imprime códigos de barras.
 AUTO_PRINT=true
 
 # Vacío = impresora predeterminada de Windows.
@@ -116,14 +104,7 @@ Variables importantes:
 | `PRINTER_NAME` | Vacío para usar la predeterminada o el nombre exacto de Windows. |
 | `TICKET_CLIENT_ID` | Un valor distinto por cada PC de tickets. |
 
-No configures estas variables en la PC de tickets:
-
-- `SUPABASE_URL`;
-- `SUPABASE_SERVICE_ROLE_KEY`;
-- `SUPABASE_KEY`;
-- `PEDIDOS_TABLE`.
-
-La API es el único proceso que accede a Supabase con `service_role`.
+No configures `SUPABASE_URL`, `SUPABASE_KEY`, `PEDIDOS_TABLE`, `SUPABASE_SERVICE_ROLE_KEY` ni ninguna otra credencial de Supabase en la PC de tickets.
 
 ## Uso normal
 
@@ -139,10 +120,10 @@ Déjalo ejecutándose en la PC de bodega. Para detenerlo, presiona `Ctrl+C`.
 
 ## Prueba manual de un pedido
 
-Para consultar y generar un ticket específico:
+Para generar y probar el ticket de un pedido específico:
 
 ```powershell
-node test-print.js GD12345
+node test-print.js 0098072
 ```
 
 El comportamiento de `test-print.js` usa `AUTO_PRINT` del `.env`:
@@ -150,11 +131,11 @@ El comportamiento de `test-print.js` usa `AUTO_PRINT` del `.env`:
 - `AUTO_PRINT=false`: genera el PDF sin imprimir.
 - `AUTO_PRINT=true`: genera e imprime.
 
-Esta prueba manual no reclama ni confirma un job; se utiliza únicamente para verificar la ruta y la impresora.
+La prueba consulta el cliente mediante `GET /picking/ruta/:pedido`, igual que el listener. No reclama ni confirma un job; se utiliza para verificar el ticket y la impresora.
 
 ## Modos de diagnóstico
 
-Para validar autenticación, consulta de ruta y conteo de productos sin generar PDF ni imprimir:
+Para validar autenticación y recepción de jobs sin generar PDF ni imprimir:
 
 ```env
 DRY_RUN=true
@@ -172,7 +153,8 @@ En ambos casos los jobs no se marcan como impresos y permanecen recuperables. En
 
 ## Impresión y recuperación
 
-- El job se reclama antes de consultar la ruta.
+- El job se reclama antes de generar el código de barras.
+- El cliente se obtiene de `nombre` en la respuesta de `GET /picking/ruta/:pedido`.
 - Si la impresora falla, el job se marca como `failed` y puede reintentarse.
 - Si la PC se apaga antes de confirmar, el lease vence y el job vuelve a ser recuperable.
 - Si la impresión física terminó pero se corta la conexión antes de `printed`, puede ocurrir una reimpresión; es la limitación inevitable entre imprimir y confirmar.
@@ -201,11 +183,11 @@ Edita `TIENDA` y usa credenciales autorizadas para esa tienda. No reutilices el 
 | Archivo | Función |
 | --- | --- |
 | `listener.js` | SSE, recuperación, cola, claim, deduplicación e impresión. |
-| `api-client.js` | Login, refresh, stream, jobs y consulta de rutas. |
-| `ticket-pdf.js` | Generación del PDF sin omitir categorías. |
+| `api-client.js` | Login, refresh, stream, consulta de pedido y jobs. |
+| `ticket-pdf.js` | Generación del PDF horizontal con código, pedido y cliente. |
 | `test-print.js` | Prueba manual de un pedido. |
 | `.env.example` | Plantilla segura de configuración. |
 
 ## Seguridad
 
-El `.env` real contiene credenciales y nunca debe subirse a GitHub. Sólo se publica `.env.example` con valores de ejemplo. La PC de tickets no debe tener ni necesitar una clave `service_role`.
+El `.env` real contiene credenciales y nunca debe subirse a GitHub. Sólo se publica `.env.example` con valores de ejemplo. La PC sólo usa las credenciales de la API; Supabase queda encapsulado dentro de la API.

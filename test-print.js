@@ -9,7 +9,7 @@ require('dotenv').config();
 const pedidoId = String(process.argv[2] ?? '').trim();
 if (!pedidoId) {
   console.log('Uso: node test-print.js <numero_de_pedido>');
-  console.log('Ejemplo: node test-print.js GD12345');
+  console.log('Ejemplo: node test-print.js 0098072');
   process.exit(0);
 }
 
@@ -22,8 +22,15 @@ const {
   PRINTER_NAME = '',
 } = process.env;
 
-if (!API_URL || !STORE_USER_EMAIL || !STORE_USER_PASSWORD || !TIENDA) {
-  console.error('ERROR: API_URL, STORE_USER_EMAIL, STORE_USER_PASSWORD y TIENDA son obligatorios.');
+const missingVars = [
+  !API_URL && 'API_URL',
+  !STORE_USER_EMAIL && 'STORE_USER_EMAIL',
+  !STORE_USER_PASSWORD && 'STORE_USER_PASSWORD',
+  !TIENDA && 'TIENDA',
+].filter(Boolean);
+
+if (missingVars.length > 0) {
+  console.error(`ERROR: Faltan variables en .env: ${missingVars.join(', ')}`);
   process.exit(1);
 }
 
@@ -39,11 +46,11 @@ async function main() {
     password: STORE_USER_PASSWORD,
     timeoutMs: Number(process.env.API_TIMEOUT_MS ?? 15_000),
   });
-
-  console.log(`Probando generación de ticket para #${pedidoId}...`);
+  console.log(`Probando ticket por API para #${pedidoId}...`);
   const rutaData = await apiClient.fetchPickingRoute(pedidoId);
-  console.log('Ruta obtenida de la API.');
-  const result = await createTicketPdf(pedidoId, rutaData.nombre ?? '', rutaData, ticketsDir);
+  const clienteNombre = String(rutaData?.nombre ?? '').trim();
+  console.log(`Cliente obtenido de la API: ${clienteNombre || 'no informado'}.`);
+  const result = await createTicketPdf(pedidoId, clienteNombre, ticketsDir);
   console.log(`PDF generado: ${result.pdfPath}`);
 
   if (shouldPrint) {

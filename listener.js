@@ -104,25 +104,6 @@ function updateJobState(job, status, extra = {}) {
   saveState();
 }
 
-function summarizeRoute(rutaData) {
-  const rutas = Array.isArray(rutaData?.rutas) ? rutaData.rutas : [];
-  const routeItems = rutas.reduce(
-    (total, piso) => total + (Array.isArray(piso?.items) ? piso.items.length : 0),
-    0,
-  );
-  const noRouteItems = rutas.reduce(
-    (total, piso) => total + (Array.isArray(piso?.sin_ruta) ? piso.sin_ruta.length : 0),
-    0,
-  );
-  const sinUbicacion = Array.isArray(rutaData?.sin_ubicacion) ? rutaData.sin_ubicacion.length : 0;
-  const sinLayout = Array.isArray(rutaData?.sin_layout) ? rutaData.sin_layout.length : 0;
-  const cambios = Array.isArray(rutaData?.cambios) ? rutaData.cambios.length : 0;
-  const rendered = routeItems + noRouteItems + sinUbicacion + sinLayout + cambios;
-  const reportedPositive = Number(rutaData?.resumen?.total_items_surtibles);
-  const expected = Number.isFinite(reportedPositive) ? reportedPositive + cambios : null;
-  return { routeItems, noRouteItems, sinUbicacion, sinLayout, cambios, rendered, expected };
-}
-
 async function printWithRetry(pdfPath) {
   const options = PRINTER_NAME ? { printer: PRINTER_NAME } : {};
   let lastError;
@@ -166,27 +147,31 @@ async function processJob(job, apiClient, previewedJobs) {
   if (previewedJobs.has(job.id)) return;
   console.log(`[${new Date().toLocaleTimeString()}] Procesando ticket #${pedidoId} (job ${job.id})...`);
 
+  let clienteNombre = '';
+  try {
+    const rutaData = await apiClient.fetchPickingRoute(pedidoId);
+    clienteNombre = String(rutaData?.nombre ?? '').trim();
+    console.log(`Cliente obtenido de la API para #${pedidoId}: ${clienteNombre || 'no informado'}.`);
+  } catch (error) {
+    updateJobState(job, 'client_lookup_failed', { error: error.message });
+    console.error(`No se pudo obtener el cliente de #${pedidoId}:`, error.message);
+    return;
+  }
+
   // La vista previa no reclama ni confirma el job: queda pendiente para producción.
   if (DRY_RUN || !AUTO_PRINT) {
     try {
-      const rutaData = await apiClient.fetchPickingRoute(pedidoId);
-      const summary = summarizeRoute(rutaData);
-      console.log(
-        `Vista previa #${pedidoId}: ${summary.rendered} líneas recibidas ` +
-        `(ruta ${summary.routeItems}, sin ruta ${summary.noRouteItems}, ` +
-        `sin ubicación ${summary.sinUbicacion}, sin layout ${summary.sinLayout}, cambios ${summary.cambios}).`,
-      );
       if (!DRY_RUN) {
-        const result = await createTicketPdf(
-          pedidoId,
-          String(rutaData?.nombre ?? '').trim(),
-          rutaData,
-          ticketsDir,
-        );
-        updateJobState(job, 'previewed', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
-        console.log(`PDF de vista previa generado: ${result.pdfPath}`);
+        const result = await createTicketPdf(pedidoId, clienteNombre, ticketsDir);
+        updateJobState(job, 'previewed', {
+          pdfPath: result.pdfPath,
+          renderedItems: result.renderedItems,
+          clienteNombre,
+        });
+        console.log(`PDF de vista previa con código de barras generado: ${result.pdfPath}`);
       } else {
-        updateJobState(job, 'dry_run', { renderedItems: summary.rendered });
+        updateJobState(job, 'dry_run', { clienteNombre });
+        console.log(`Vista previa de código de barras para #${pedidoId}.`);
       }
       previewedJobs.add(job.id);
     } catch (error) {
@@ -234,45 +219,41 @@ async function processJob(job, apiClient, previewedJobs) {
       throw new Error(`La API no permitió reclamar el job ${job.id}: ${claim?.reason || 'respuesta inválida'}.`);
     }
     claimed = true;
-    updateJobState(job, 'claimed', { attempts: claim?.job?.attempts ?? null });
+    updateJobState(job, 'claimed', {
+      attempts: claim?.job?.attempts ?? null,
+      clienteNombre,
+    });
 
-    const rutaData = await apiClient.fetchPickingRoute(pedidoId);
-    const summary = summarizeRoute(rutaData);
-    console.log(
-      `Pedido #${pedidoId}: ${summary.rendered} líneas recibidas ` +
-      `(ruta ${summary.routeItems}, sin ruta ${summary.noRouteItems}, ` +
-      `sin ubicación ${summary.sinUbicacion}, sin layout ${summary.sinLayout}, cambios ${summary.cambios}).`,
-    );
-
-    if (summary.expected !== null && summary.rendered !== summary.expected) {
-      console.warn(
-        `ADVERTENCIA: la API reporta ${summary.expected} líneas totales, ` +
-        `pero devolvió ${summary.rendered}. Se imprimirán todas las líneas recibidas.`,
-      );
-    }
-
-    const result = await createTicketPdf(
-      pedidoId,
-      String(rutaData?.nombre ?? '').trim(),
-      rutaData,
-      ticketsDir,
-    );
-    updateJobState(job, 'generated', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
-    console.log(`PDF generado: ${result.pdfPath}`);
+    const result = await createTicketPdf(pedidoId, clienteNombre, ticketsDir);
+    updateJobState(job, 'generated', {
+      pdfPath: result.pdfPath,
+      renderedItems: result.renderedItems,
+      clienteNombre,
+    });
+    console.log(`PDF de código de barras generado: ${result.pdfPath}`);
 
     await printWithRetry(result.pdfPath);
     physicalPrintSucceeded = true;
-    updateJobState(job, 'printed_unconfirmed', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
+    updateJobState(job, 'printed_unconfirmed', {
+      pdfPath: result.pdfPath,
+      renderedItems: result.renderedItems,
+      clienteNombre,
+    });
     console.log(`Ticket #${pedidoId} enviado a ${PRINTER_NAME || 'la impresora predeterminada'}.`);
 
     try {
       const printed = await apiClient.markTicketJobPrinted(job.id, clientId);
-      updateJobState(job, 'printed', { pdfPath: result.pdfPath, renderedItems: result.renderedItems });
+      updateJobState(job, 'printed', {
+        pdfPath: result.pdfPath,
+        renderedItems: result.renderedItems,
+        clienteNombre,
+      });
       console.log(`Job ${job.id} confirmado como ${printed?.reason || 'printed'}.`);
     } catch (error) {
       updateJobState(job, 'printed_unconfirmed', {
         pdfPath: result.pdfPath,
         renderedItems: result.renderedItems,
+        clienteNombre,
         error: error.message,
       });
       console.error(`La impresión fue exitosa, pero no se confirmó el job ${job.id}:`, error.message);

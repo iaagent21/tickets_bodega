@@ -3,77 +3,53 @@ const { test } = require('node:test');
 const { renderTicketContent } = require('../ticket-pdf');
 
 function createDocumentDouble() {
-  const document = {
-    y: 12,
-    texts: [],
+  return {
     images: [],
-    lines: 0,
+    texts: [],
     font() { return this; },
     fontSize() { return this; },
     text(value) {
       this.texts.push(String(value));
       return this;
     },
-    moveDown(amount = 1) {
-      this.y += Number(amount) * 5;
-      return this;
-    },
-    lineWidth() { return this; },
-    moveTo() { return this; },
-    lineTo() { return this; },
-    stroke() {
-      this.lines += 1;
-      return this;
-    },
-    heightOfString(value) {
-      return Math.max(10, Math.ceil(String(value).length / 40) * 10);
-    },
-    addPage() {
-      this.y = 12;
-      return this;
-    },
-    image(buffer) {
-      this.images.push(buffer);
+    image(buffer, x, y, options) {
+      this.images.push({ buffer, x, y, options });
       return this;
     },
   };
-  return document;
 }
 
-function emptyRoute(overrides = {}) {
-  return {
-    vendedora: 'Ana López',
-    total_documento: 1234.5,
-    resumen: { total_items_surtibles: 0 },
-    rutas: [],
-    sin_ubicacion: [],
-    sin_layout: [],
-    cambios: [],
-    ...overrides,
-  };
-}
-
-test('el ticket imprime vendedora arriba del pedido y total antes del código de barras', () => {
+test('el ticket contiene código, pedido y cliente', () => {
   const document = createDocumentDouble();
 
-  renderTicketContent(document, '0013481', 'JAVIER SOLANO', emptyRoute(), Buffer.from('barcode'));
+  const result = renderTicketContent(
+    document,
+    '0013481',
+    'JAVIER SOLANO',
+    Buffer.from('barcode'),
+  );
 
-  const sellerIndex = document.texts.indexOf('Vendedora: Ana López');
-  const orderIndex = document.texts.indexOf('Pedido: #0013481');
-  const totalIndex = document.texts.indexOf('Total: $1,234.50');
-  assert.ok(sellerIndex >= 0);
-  assert.ok(orderIndex > sellerIndex);
-  assert.ok(totalIndex > orderIndex);
   assert.equal(document.images.length, 1);
-  assert.ok(document.lines >= 3, 'el encabezado y el total deben conservar sus separadores');
+  assert.deepEqual(document.texts, ['Pedido: #0013481 - Cliente: JAVIER SOLANO']);
+  assert.equal(result.renderedItems, 0);
+  assert.equal(result.expectedTotal, null);
+  assert.equal(document.images[0].options.width, 205);
+  assert.equal(document.images[0].options.height, 62);
 });
 
-test('el ticket conserva compatibilidad cuando el total no viene informado', () => {
+test('el ticket indica cuando el cliente no viene informado', () => {
   const document = createDocumentDouble();
 
-  renderTicketContent(document, '0013481', '', emptyRoute({ vendedora: null, total_documento: null }), Buffer.from('barcode'));
+  renderTicketContent(document, '0013481', '', Buffer.from('barcode'));
 
-  assert.equal(document.texts.some((text) => text.startsWith('Vendedora:')), false);
-  assert.equal(document.texts.some((text) => text.startsWith('Total:')), false);
-  assert.equal(document.images.length, 1);
+  assert.deepEqual(document.texts, ['Pedido: #0013481 - Cliente: Cliente no informado']);
+});
+
+test('el ticket falla si no existe el código de barras', () => {
+  const document = createDocumentDouble();
+
+  assert.throws(
+    () => renderTicketContent(document, '0013481', 'JAVIER SOLANO', null),
+    /No se generó el código de barras/,
+  );
 });

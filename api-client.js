@@ -168,7 +168,13 @@ function createApiClient({ apiUrl, tienda, email, password, timeoutMs = 15_000 }
   }
 
   async function fetchPickingRoute(pedido) {
-    return authenticatedJson(`/picking/ruta/${encodeURIComponent(pedido)}`);
+    const normalizedPedido = String(pedido ?? '').trim();
+    if (!normalizedPedido) throw new Error('El número de pedido es obligatorio.');
+    const data = await authenticatedJson(`/picking/ruta/${encodeURIComponent(normalizedPedido)}`);
+    if (!data || typeof data !== 'object') {
+      throw new Error('La API devolvió una respuesta inválida para la ruta del pedido.');
+    }
+    return data;
   }
 
   async function listPendingTicketJobs({ clientId, after = null, limit = 100 } = {}) {
